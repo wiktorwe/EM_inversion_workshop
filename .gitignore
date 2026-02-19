@@ -15,11 +15,7 @@ __pycache__/
 .voila*.pid
 
 # Generated inversion/FD outputs
-FDmodel/*.rss
-FDmodel/*.log
-FDmodel/log.txt-*
-FDmodel/Data/
-FDmodel/setup_metadata.json
+FDmodel/
 
 InversionRun*/log.txt-*
 InversionRun*/mpiqueue.log
