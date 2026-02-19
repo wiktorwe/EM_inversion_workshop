@@ -8,8 +8,9 @@ Install these before starting:
 
 - Python 3.10+ (or a conda environment with Python)
 - `mpirun` (OpenMPI or compatible MPI runtime)
-- RockEM suite binary at:
+- RockEM suite binaries at:
   `~/software/rockem-suite/bin/mpiEmmodADITE2d`
+  `~/software/rockem-suite/bin/mpiEminvADITE2d`
 
 Install Python packages:
 
@@ -65,4 +66,7 @@ Each command starts a Voila app for that stage.
 - If modelling cannot start, verify:
   - `mpirun` is available in your shell
   - `~/software/rockem-suite/bin/mpiEmmodADITE2d` exists
+- If inversion cannot start, verify:
+  - `mpirun` is available in your shell
+  - `~/software/rockem-suite/bin/mpiEminvADITE2d` exists
 - If a GUI does not open, ensure `voila` is installed in the active environment.

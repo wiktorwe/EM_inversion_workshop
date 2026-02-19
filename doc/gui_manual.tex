@@ -182,6 +182,10 @@ The MPI FD binary (e.g.\ \texttt{\textasciitilde/software/rockem-suite/bin/mpiEm
 
 Generate inversion inputs from \texttt{FDmodel} and the inversion template, run the inversion locally (staged into the next \texttt{InversionRunN} directory), and monitor logs and model progress.
 
+\subsection{External requirement}
+
+The MPI inversion binary (e.g.\ \texttt{\textasciitilde/software/rockem-suite/bin/mpiEminvADITE2d}) must be installed and the path in \texttt{runinv.sh} must be correct. The GUI and run script reference this binary.
+
 \subsection{Parameters (physical meaning and impact)}
 
 \begin{itemize}
@@ -245,7 +249,8 @@ View inversion results: select a run and model (e.g.\ \texttt{sg0}, \texttt{sg\_
 \begin{itemize}
   \item \textbf{Missing \texttt{segyio}} — If 01\_fw\_setup fails to import workshop modules, ensure \texttt{segyio} is installed and that Voila is started from the workshop root so \texttt{scripts} and \texttt{third\_party} are on the path.
   \item \textbf{SEGY export cannot find template} — 04\_results export expects a setup SEG-Y template from \texttt{FDmodel/setup\_metadata.json} (\texttt{segy\_template\_path}), with fallback to \texttt{input.segy} in the project root. Run 01\_fw\_setup and finalize setup first, or place a valid \texttt{input.segy} in the root.
-  \item \textbf{Missing MPI FD binary} — 02\_visualization and 04\_results (when generating synthetics) need the MPI FD binary (e.g.\ rockem-suite). Check the path in \texttt{FDmodel/runmod.sh} and that the binary exists.
+  \item \textbf{Missing MPI FD binary} — 02\_visualization and 04\_results (when generating synthetics) need the MPI FD binary (e.g.\ \texttt{\textasciitilde/software/rockem-suite/bin/mpiEmmodADITE2d}). Check the path in \texttt{FDmodel/runmod.sh} and that the binary exists.
+  \item \textbf{Missing MPI inversion binary} — 03\_inversion needs the MPI inversion binary (e.g.\ \texttt{\textasciitilde/software/rockem-suite/bin/mpiEminvADITE2d}). Check the path in \texttt{scripts/templates/runinv.sh} and that the binary exists.
   \item \textbf{PID file} — 01\_fw\_setup and 04\_results both use \texttt{.voila\_server.pid}; do not run both at once if you rely on that file.
 \end{itemize}
 
