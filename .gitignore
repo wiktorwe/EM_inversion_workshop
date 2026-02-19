@@ -1,0 +1,38 @@
+# OS/editor
+.DS_Store
+.vscode/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local runtime PID files
+.voila*.pid
+
+# Generated inversion/FD outputs
+FDmodel/*.rss
+FDmodel/*.log
+FDmodel/log.txt-*
+FDmodel/Data/
+FDmodel/setup_metadata.json
+
+InversionRun*/log.txt-*
+InversionRun*/mpiqueue.log
+InversionRun*/inversion.log
+InversionRun*/progress.log
+InversionRun*/inversion_setup_metadata.json
+InversionRun*/
+InversionInput/
+
+# Generated LaTeX artifacts
+*.aux
+*.out
+*.log
+
+# Local temp workspace
+tmp/
