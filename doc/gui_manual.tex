@@ -33,6 +33,15 @@ All GUIs are Jupyter notebooks served as code-hidden applications via Voila (ipy
 \section{Environment setup}
 %=============================================================================
 
+\subsection{System prerequisites}
+
+Before setting up Python, ensure you have:
+\begin{itemize}
+  \item Python 3.10 or newer
+  \item \texttt{mpirun} (OpenMPI or compatible MPI runtime)
+  \item RockEM suite binaries: \texttt{\textasciitilde/software/rockem-suite/bin/mpiEmmodADITE2d} and \texttt{\textasciitilde/software/rockem-suite/bin/mpiEminvADITE2d}
+\end{itemize}
+
 \subsection{Creating a virtual environment (venv)}
 
 From the workshop root:
@@ -63,6 +72,9 @@ With the virtual or conda environment activated, install:
   \texttt{ipywidgets}& Interactive widgets in the GUI. \\
   \texttt{plotly}    & Interactive plots. \\
   \texttt{numpy}     & Numerical arrays (used by inversion and results GUIs). \\
+  \texttt{ipykernel} & Jupyter kernel for Python (required for Voila to run notebooks). \\
+  \texttt{matplotlib}& Plotting (used by workshop modules). \\
+  \texttt{scipy}     & Scientific computing (used by workshop modules). \\
   \texttt{segyio}    & Read/write SEG-Y files (required by 01\_fw\_setup). \\
   \bottomrule
 \end{tabular}
@@ -70,7 +82,12 @@ With the virtual or conda environment activated, install:
 
 Command:
 \begin{quote}
-  \texttt{pip install voila ipywidgets plotly numpy segyio}
+  \texttt{pip install voila ipywidgets plotly numpy ipykernel matplotlib scipy segyio}
+\end{quote}
+
+\textbf{Conda users:} After installing, register the kernel so Voila can find it:
+\begin{quote}
+  \texttt{python -m ipykernel install --user --name=em\_workshop --display-name="Python (em\_workshop)"}
 \end{quote}
 
 For reproducibility you can add a \texttt{requirements.txt} in the project root with these packages and then run \texttt{pip install -r requirements.txt}.
@@ -248,6 +265,7 @@ View inversion results: select a run and model (e.g.\ \texttt{sg0}, \texttt{sg\_
 
 \begin{itemize}
   \item \textbf{Missing \texttt{segyio}} — If 01\_fw\_setup fails to import workshop modules, ensure \texttt{segyio} is installed and that Voila is started from the workshop root so \texttt{scripts} and \texttt{third\_party} are on the path.
+  \item \textbf{No Jupyter kernel for language `python' found} — Install \texttt{ipykernel} and register the kernel (see Install dependencies above). Conda users must run \texttt{python -m ipykernel install --user --name=em\_workshop} after installing packages.
   \item \textbf{SEGY export cannot find template} — 04\_results export expects a setup SEG-Y template from \texttt{FDmodel/setup\_metadata.json} (\texttt{segy\_template\_path}), with fallback to \texttt{input.segy} in the project root. Run 01\_fw\_setup and finalize setup first, or place a valid \texttt{input.segy} in the root.
   \item \textbf{Missing MPI FD binary} — 02\_visualization and 04\_results (when generating synthetics) need the MPI FD binary (e.g.\ \texttt{\textasciitilde/software/rockem-suite/bin/mpiEmmodADITE2d}). Check the path in \texttt{FDmodel/runmod.sh} and that the binary exists.
   \item \textbf{Missing MPI inversion binary} — 03\_inversion needs the MPI inversion binary (e.g.\ \texttt{\textasciitilde/software/rockem-suite/bin/mpiEminvADITE2d}). Check the path in \texttt{scripts/templates/runinv.sh} and that the binary exists.

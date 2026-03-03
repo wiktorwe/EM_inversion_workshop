@@ -6,19 +6,54 @@ This repository contains an interactive workshop for electromagnetic (EM) forwar
 
 Install these before starting:
 
-- Python 3.10+ (or a conda environment with Python)
+- Python 3.10+
 - `mpirun` (OpenMPI or compatible MPI runtime)
 - RockEM suite binaries at:
   `~/software/rockem-suite/bin/mpiEmmodADITE2d`
   `~/software/rockem-suite/bin/mpiEminvADITE2d`
 
-Install Python packages:
+### Environment setup
+
+**Option A — Conda**
 
 ```bash
-python3 -m pip install voila ipywidgets plotly numpy
+conda create -n em_workshop python=3.10
+conda activate em_workshop
 ```
 
-If you use conda, activate your environment first and run the same command.
+**Option B — Python venv**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate   # Linux/macOS
+# .venv\Scripts\activate   # Windows
+pip install --upgrade pip
+```
+
+### Install dependencies
+
+With your environment activated, install the required Python packages:
+
+```bash
+pip install voila ipywidgets plotly numpy ipykernel matplotlib scipy segyio
+```
+
+| Package     | Purpose |
+|-------------|---------|
+| voila       | Serves notebooks as standalone web apps (code hidden) |
+| ipywidgets  | Interactive widgets in the GUI |
+| plotly      | Interactive plots |
+| numpy       | Numerical arrays |
+| ipykernel   | Jupyter kernel for Python (required for Voila) |
+| matplotlib  | Plotting (used by workshop modules) |
+| scipy       | Scientific computing (used by workshop modules) |
+| segyio      | Read/write SEG-Y files (required by 01_fw_setup) |
+
+**Conda users:** After installing, register the kernel so Voila can find it:
+
+```bash
+python -m ipykernel install --user --name=em_workshop --display-name="Python (em_workshop)"
+```
 
 ## 2) Get the workshop
 
@@ -70,3 +105,4 @@ Each command starts a Voila app for that stage.
   - `mpirun` is available in your shell
   - `~/software/rockem-suite/bin/mpiEminvADITE2d` exists
 - If a GUI does not open, ensure `voila` is installed in the active environment.
+- If you see "No Jupyter kernel for language 'python' found", install `ipykernel` and register the kernel (see Install dependencies above).
