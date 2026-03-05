@@ -142,7 +142,7 @@ def resample_resistivity_to_template_grid(
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(
             "Interpolation requires scipy via third_party.rockseis.tools.interp_kernels. "
-            "Install scipy in the active environment."
+            "Install with: pip install scipy"
         ) from exc
 
     out = resample_nd_regular(
