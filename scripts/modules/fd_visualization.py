@@ -86,6 +86,20 @@ def estimate_two_point_window(trace, dt, freq, start_t, end_t, n_pairs):
     }
 
 
+def estimate_fft(trace, dt, target_freq):
+    """
+    FFT-based amplitude/phase estimate (from Amp_and_fase.py).
+    Isolates each frequency bin; better for signals with multiple frequencies.
+    """
+    nt = len(trace)
+    freqs = np.fft.fftfreq(nt, d=dt)
+    idx = np.argmin(np.abs(freqs - target_freq))
+    spectrum = np.fft.fft(np.hanning(nt) * trace, axis=0)
+    amp = np.abs(spectrum)[idx] / (nt / 4)
+    phase = np.angle(spectrum)[idx]
+    return amp, phase, freqs[idx]
+
+
 def build_trace_index(src_x, src_z, rx_x, rx_z, decimals=6):
     """
     Build tx/rx index arrays for each trace based on geometry coordinates.
@@ -136,7 +150,9 @@ def compute_amp_phase_for_component(
     n_pairs=3,
 ):
     """
-    Compute two-point window amplitude/phase for each (freq, trace).
+    Compute FFT amplitude/phase for each (freq, trace).
+    If start_t and end_t are provided, slice trace before FFT to exclude transients.
+    n_pairs is ignored (kept for API compatibility).
     """
     traces = np.asarray(traces_data, dtype=float)
     if traces.ndim != 2:
@@ -145,23 +161,26 @@ def compute_amp_phase_for_component(
     freqs = np.asarray(freqs, dtype=float)
 
     amp_mean = np.full((len(freqs), ntrace), np.nan, dtype=float)
-    amp_std = np.full((len(freqs), ntrace), np.nan, dtype=float)
+    amp_std = np.full((len(freqs), ntrace), 0.0, dtype=float)
     phi_mean = np.full((len(freqs), ntrace), np.nan, dtype=float)
-    phi_std = np.full((len(freqs), ntrace), np.nan, dtype=float)
+    phi_std = np.full((len(freqs), ntrace), 0.0, dtype=float)
 
     for ifreq, freq in enumerate(freqs):
         if freq <= 0:
             continue
-        start = float(start_t if start_t is not None else (1.0 / freq))
-        stop = float(end_t if end_t is not None else (2.0 / freq))
-        if stop <= start:
-            stop = start + 0.25 / freq + dt
         for itr in range(ntrace):
-            res = estimate_two_point_window(traces[:, itr], dt, freq, start, stop, n_pairs)
-            amp_mean[ifreq, itr] = res["mean_amp"]
-            amp_std[ifreq, itr] = res["std_amp"]
-            phi_mean[ifreq, itr] = res["mean_phi"]
-            phi_std[ifreq, itr] = res["std_phi"]
+            trace = traces[:, itr]
+            if start_t is not None and end_t is not None:
+                start_idx = int(round(start_t / dt))
+                end_idx = int(round(end_t / dt))
+                start_idx = max(0, min(start_idx, nt - 1))
+                end_idx = max(start_idx + 1, min(end_idx, nt))
+                trace = trace[start_idx:end_idx]
+                if len(trace) < 2:
+                    continue
+            amp, phi, _ = estimate_fft(trace, dt, freq)
+            amp_mean[ifreq, itr] = amp
+            phi_mean[ifreq, itr] = phi
 
     return {
         "nt": nt,
@@ -184,7 +203,7 @@ def compute_amp_phase_for_fd_outputs(
     n_pairs=3,
 ):
     """
-    End-to-end load + two-point extraction for Hx/Hz RSS outputs.
+    End-to-end load + FFT extraction for Hx/Hz RSS outputs.
     """
     hx = load_rss_traces(hx_path)
     hz = load_rss_traces(hz_path)
@@ -258,6 +277,7 @@ __all__ = [
     "build_trace_index",
     "compute_amp_phase_for_component",
     "compute_amp_phase_for_fd_outputs",
+    "estimate_fft",
     "estimate_two_point",
     "estimate_two_point_window",
     "load_rss_traces",
