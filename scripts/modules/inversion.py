@@ -202,6 +202,12 @@ def prepare_inversion_inputs(
         hx_record_path=data_paths["Recordfile_HX"],
         weight_path=output_dir / "weight.rss",
     )
+    mod_cfg_values = read_cfg_values(Path(fdmodel_dir) / "mod.cfg")
+    pml_updates = {}
+    for key in ("pml_kmax", "pml_smax", "pml_amax"):
+        value = mod_cfg_values.get(key)
+        if value is not None:
+            pml_updates[key] = value
     cfg_path = output_dir / "inv.cfg"
     write_inv_cfg(
         template_cfg=template_cfg,
@@ -217,6 +223,7 @@ def prepare_inversion_inputs(
             "Recordfile_HX": "Hx_data.rss",
             "Recordfile_HZ": "Hz_data.rss",
             "Dataweightfile": "weight.rss",
+            **pml_updates,
         },
     )
     return {
