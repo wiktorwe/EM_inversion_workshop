@@ -201,6 +201,8 @@ def compute_amp_phase_for_fd_outputs(
     start_t=None,
     end_t=None,
     n_pairs=3,
+    apply_time_derivative=False,
+    derivative_method="np_gradient",
 ):
     """
     End-to-end load + FFT extraction for Hx/Hz RSS outputs.
@@ -213,8 +215,19 @@ def compute_amp_phase_for_fd_outputs(
         raise ValueError(f"Hx/Hz dt mismatch: {hx['dt']} vs {hz['dt']}")
 
     idx = build_trace_index(hx["src_x"], hx["src_z"], hx["rx_x"], hx["rx_z"])
+    hx_data = np.asarray(hx["data"], dtype=float)
+    hz_data = np.asarray(hz["data"], dtype=float)
+    if apply_time_derivative:
+        if str(derivative_method) != "np_gradient":
+            raise ValueError(
+                f"Unsupported derivative_method={derivative_method!r}. "
+                "Use 'np_gradient'."
+            )
+        hx_data = np.gradient(hx_data, hx["dt"], axis=0)
+        hz_data = np.gradient(hz_data, hz["dt"], axis=0)
+
     hx_out = compute_amp_phase_for_component(
-        hx["data"],
+        hx_data,
         dt=hx["dt"],
         freqs=freqs,
         start_t=start_t,
@@ -222,7 +235,7 @@ def compute_amp_phase_for_fd_outputs(
         n_pairs=n_pairs,
     )
     hz_out = compute_amp_phase_for_component(
-        hz["data"],
+        hz_data,
         dt=hz["dt"],
         freqs=freqs,
         start_t=start_t,
@@ -241,6 +254,10 @@ def compute_amp_phase_for_fd_outputs(
         },
         "Hx": hx_out,
         "Hz": hz_out,
+        "extraction": {
+            "apply_time_derivative": bool(apply_time_derivative),
+            "derivative_method": str(derivative_method),
+        },
     }
 
 
