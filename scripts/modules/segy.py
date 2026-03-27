@@ -220,23 +220,50 @@ def save_resistivity_npz(output_path, resistivity, oz, dz, dx, x, z):
     np.savez(output_path, resistivity=resistivity, oz=oz, dz=dz, dx=dx, x=x, z=z)
 
 
-def write_sg_ep_rss(resistivity, dx, dz, ox, oz, sg_path, ep_path, ep_value=7.0):
-    """Write conductivity (sg) and permittivity (ep) RSS files."""
+def write_sg_ep_rss(
+    resistivity,
+    dx,
+    dz,
+    ox,
+    oz,
+    sg_path,
+    ep_path,
+    ep_value=7.0,
+    ny_samples=1,
+    dy=None,
+    oy=0.0,
+    an_path=None,
+):
+    """Write conductivity (sg) and permittivity (ep) RSS files.
+
+    For 2D modelling keep ny_samples=1. For 2.5D/3D workflows, set ny_samples>1
+    and optionally provide an_path to also write an anisotropy model of ones.
+    """
     sg = 1.0 / resistivity
     nz, nx = sg.shape
+    ny = max(1, int(ny_samples))
     sg = np.reshape(sg.T, [nx, 1, nz])
+    if ny > 1:
+        sg = np.tile(sg, (1, ny, 1))
     ep = np.ones(sg.shape) * ep_value
+    an = np.ones(sg.shape)
+    dy_eff = float(dx if dy is None else dy)
 
     outfile = rsfile(sg)
     outfile.geomD[0] = dx
-    outfile.geomD[1] = dx
+    outfile.geomD[1] = dy_eff
     outfile.geomD[2] = dz
     outfile.geomO[0] = ox
+    outfile.geomO[1] = oy
     outfile.geomO[2] = oz
     outfile.write(sg_path)
 
     outfile.data = ep
     outfile.write(ep_path)
+
+    if an_path is not None:
+        outfile.data = an
+        outfile.write(an_path)
 
 
 __all__ = [

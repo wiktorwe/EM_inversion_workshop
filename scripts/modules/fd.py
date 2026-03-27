@@ -294,8 +294,10 @@ def update_modcfg_for_workshop(
     modcfg_path,
     dtrec_s=None,
     apertx_m=None,
+    aperty_m=None,
     sg_path=None,
     ep_path=None,
+    an_path=None,
     wavelet_path=None,
     survey_path=None,
     pml_kmax=None,
@@ -307,10 +309,14 @@ def update_modcfg_for_workshop(
         updates["dtrec"] = f"{float(dtrec_s):.6e}"
     if apertx_m is not None:
         updates["apertx"] = f"{float(apertx_m):.6f}"
+    if aperty_m is not None:
+        updates["aperty"] = f"{float(aperty_m):.6f}"
     if sg_path is not None:
         updates["Sg"] = str(sg_path)
     if ep_path is not None:
         updates["Ep"] = str(ep_path)
+    if an_path is not None:
+        updates["A"] = str(an_path)
     if wavelet_path is not None:
         updates["Wavelet"] = str(wavelet_path)
     if survey_path is not None:

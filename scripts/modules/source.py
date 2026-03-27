@@ -42,6 +42,7 @@ def create_wavelet_rss(
     lowpass_factor=1.5,
     alpha=0.5,
     wavfile="wav2d.rss",
+    dim=2,
     show_plot=True,
 ):
     """Create a continuous wave wavelet and write it to RSS."""
@@ -53,13 +54,17 @@ def create_wavelet_rss(
     if show_plot:
         wavmod.plot()
 
-    wav_out = rsfile(wav, 2)
+    dim_int = int(dim)
+    if dim_int not in (2, 3):
+        raise ValueError(f"Unsupported wavelet dim={dim_int}. Expected 2 or 3.")
+    wav_out = rsfile(wav, dim_int)
     wav_out.geomD[0] = params["dt"]
     wav_out.write(wavfile)
 
     params["wavfile"] = wavfile
     params["lowpass_hz"] = params["freq"] * lowpass_factor
     params["alpha"] = alpha
+    params["dim"] = dim_int
     params["waveform"] = np.asarray(wav).reshape(-1)
     params["time_axis_s"] = np.arange(params["nt"], dtype=float) * params["dt"]
     return params
