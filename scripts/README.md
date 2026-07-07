@@ -56,6 +56,8 @@ Other utilities:
 
 - `../clean.sh` / `clean_workspace.py`: remove the entire `workspace/` tree and restore a pristine checkout.
 - `validate_notebooks.py`: smoke-test each notebook's setup cell (`python scripts/validate_notebooks.py --expect-rockem-missing` if rockem-suite is not configured yet).
+- `normalize_notebooks.py`: add nbformat cell ids to all workshop notebooks (run after editing `.ipynb` files).
+- `../jupyter_config/jupyter_server_config.py`: Voila websocket settings used by `start_*.sh`.
 
 The notebooks import from `scripts.modules.*` and templates in
 `scripts/templates` so logic is not tied to temporary project folders.

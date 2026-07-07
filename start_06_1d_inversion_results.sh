@@ -3,7 +3,9 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 cd "$SCRIPT_DIR"
+. "$SCRIPT_DIR/scripts/voila_common.sh"
 
+NOTEBOOK="06_1d_inversion_results.ipynb"
 PID_FILE="$SCRIPT_DIR/.voila_1d_results_server.pid"
 echo "$$" > "$PID_FILE"
 cleanup() {
@@ -11,4 +13,5 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-exec voila "06_1d_inversion_results.ipynb" --strip_sources=True
+trust_notebook "$NOTEBOOK"
+exec voila "$NOTEBOOK" --strip_sources=True
