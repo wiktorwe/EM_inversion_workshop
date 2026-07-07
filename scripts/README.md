@@ -30,7 +30,9 @@ This folder is the module-oriented script codebase used by the GUI notebooks
 - `survey.py`: survey config and `Survey.rss` helpers.
 - `fd.py`: explicit-engine (`mpiEmmodTE2d`/`mpiEminvTE2d`) FD design
   (`design_explicit_fd` - dx/dt/eps_r/safety/PML/aperture/depth-margin),
-  RSS interpolation, and `mod.cfg` update helpers.
+  sizing `dt` via `rockem.utils.explicit_em_cfl_dt` (order-aware, σ-independent
+  Yee CFL matching the engine's `checkStability`), RSS interpolation, and
+  `mod.cfg` update helpers.
 - `fd_visualization.py`: FD shot-gather loading and steady-state
   phasor-ratio channel-gain extraction (`compute_gains_for_fd_outputs`).
 - `analytic_1d_forward.py`: 1D layered forward model for the workshop's

@@ -5,11 +5,10 @@ limit (`k_cfl=10` in the old `recommend_dt_from_grid`) - the suite's own
 `validate_layered_1d_model` shows ADI TE2D fails the layered Green's-
 function check (HZ ~178% error) where the explicit engine passes (~1-4%),
 so this workshop now targets the **explicit** engine exclusively
-(`mpiEmmodTE2d`/`mpiEminvTE2d`). `design_explicit_fd` below replaces the
-ADI-era `recommend_design`/`recommend_dt_from_grid`/`recommend_workshop_
-pml_parameters` with rules built on `rockem.utils`' conductive-CFL/PML
-sizing helpers (the same ones the suite's own validated examples use) - see
-`scripts.modules.rockem_bridge` for how those are wired in.
+(`mpiEmmodTE2d`/`mpiEminvTE2d`). `design_explicit_fd` sizes `dt` via
+`rockem.utils.suggest_time_steps` -> `explicit_em_cfl_dt` (order-aware,
+sigma-independent Yee CFL enforced by ModellingEm*/FwiEm*::checkStability)
+plus PML helpers from `rockem.utils` - see `scripts.modules.rockem_bridge`.
 """
 
 import re
@@ -55,6 +54,7 @@ class ExplicitDesignInputs:
     aperture_margin_m: float = 60.0
     dx_round_m: float = 0.05
     max_depth_offset_m: float = 0.0
+    fd_order: int = 2
 
 
 @dataclass
@@ -63,6 +63,7 @@ class ExplicitDesignOutputs:
     dt_s: float
     eps_r_used: float
     explicit_cfl_safety: float
+    fd_order: int
     sigma_max_s_per_m: float
     sigma_min_s_per_m: float
     eps_r_cap_binding: bool
@@ -89,8 +90,9 @@ def _safety_from_eps_r(eps_r: float) -> float:
     check at eps_r=1000 on this exact geometry found `explicit_cfl_safety`
     from 0.45 up to 0.98 all give the SAME ~0.7% worst-case normalized
     amplitude error (flat, not correlated with safety/dt at all) - the
-    engine's own `checkStability` only rejects (loudly, `dt >= dt_cfl`) at
-    safety>=1.0. No silent-wrong regime was found anywhere in that range.
+    engine's `checkStability` hard-aborts when `dt` is at or above the
+    order-aware `explicit_em_cfl_dt` limit. No silent-wrong regime was found
+    anywhere in that range.
 
     An earlier version of this function interpolated safety DOWN as eps_r
     climbed past 100 (toward 0.50 at eps_r=1000), based on a since-retracted
@@ -102,6 +104,13 @@ def _safety_from_eps_r(eps_r: float) -> float:
     the old interpolation without a fresh, independently-reproduced finding.
     """
     return 0.95
+
+
+def resolve_fd_order_from_cfg(cfg_path: Path, default: int = 2) -> int:
+    """Read the explicit-engine FD stencil order from mod.cfg / inv.cfg."""
+    values = read_cfg_values(Path(cfg_path))
+    raw = values.get("order", str(int(default)))
+    return max(1, min(8, int(float(raw))))
 
 
 def design_explicit_fd(inputs: ExplicitDesignInputs) -> ExplicitDesignOutputs:
@@ -154,11 +163,15 @@ def design_explicit_fd(inputs: ExplicitDesignInputs) -> ExplicitDesignOutputs:
     eps_r_used = float(np.clip(eps_r_raw, 7.0, inputs.eps_r_cap))
     eps_r_cap_binding = eps_r_raw > inputs.eps_r_cap
 
+    fd_order = max(1, min(8, int(inputs.fd_order)))
     safety = _safety_from_eps_r(eps_r_used)
     time_out = rockem_utils.suggest_time_steps(
         rockem_utils.TimeRecInputs(
-            grid=rockem_utils.GridSpec(dx=dx, dz=dx), eps_r_min=eps_r_used,
-            sigma_max_s_per_m=sigma_max, explicit_cfl_safety=safety, use_grid_diff_cap=False,
+            grid=rockem_utils.GridSpec(dx=dx, dz=dx),
+            eps_r_min=eps_r_used,
+            order=fd_order,
+            explicit_cfl_safety=safety,
+            use_grid_diff_cap=False,
         )
     )
     dt = time_out.dt_explicit_cfl_s
@@ -192,12 +205,15 @@ def design_explicit_fd(inputs: ExplicitDesignInputs) -> ExplicitDesignOutputs:
         f"dx=min(induction {dx_induction:.4f} m, offset {dx_offset:.4f} m)={dx_raw:.4f} m "
         f"-> rounded down to {dx:.4f} m; eps_r={'CAPPED at' if eps_r_cap_binding else 'set to'} "
         f"{eps_r_used:.1f} (tan_delta_floor={inputs.tan_delta_floor:.0f} at f_max/sigma_min); "
-        f"explicit_cfl_safety={safety:.2f}; min_domain_halfdepth={min_domain_halfdepth:.2f} m "
+        f"explicit_cfl_safety={safety:.2f}; fd_order={fd_order} "
+        f"(explicit_em_cfl_dt / engine checkStability); "
+        f"min_domain_halfdepth={min_domain_halfdepth:.2f} m "
         f"from source depth (max_depth_offset={inputs.max_depth_offset_m:.2f} m + "
         f"margin={depth_margin:.2f} m)"
     )
     return ExplicitDesignOutputs(
         dx_m=dx, dt_s=dt, eps_r_used=eps_r_used, explicit_cfl_safety=safety,
+        fd_order=fd_order,
         sigma_max_s_per_m=sigma_max, sigma_min_s_per_m=sigma_min, eps_r_cap_binding=eps_r_cap_binding,
         apertx_m=apertx, lpml=inputs.lpml, pml_kmax=pml_out.pml_kmax, pml_smax=pml_out.pml_smax,
         pml_amax=pml_out.pml_amax, delta_induction_m=dx_induction,
@@ -364,6 +380,7 @@ def update_modcfg_for_workshop(
 __all__ = [
     "ExplicitDesignInputs",
     "ExplicitDesignOutputs",
+    "resolve_fd_order_from_cfg",
     "design_explicit_fd",
     "estimate_nt_and_cost",
     "enforce_rss_min_value",
