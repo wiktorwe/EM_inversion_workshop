@@ -209,9 +209,7 @@ Generate finite-difference (FD) modelling inputs from a SEG-Y resistivity model:
 
 \begin{itemize}
 
-  \item \textbf{SEGY file} — Path to the input SEG-Y file containing the resistivity model. Defaults to \texttt{examples/Fault\_1.sgy} if configured in Step 00. This defines the subsurface you are simulating: the grid and resistivity values control where EM waves propagate and how they attenuate.
-
-  \item \textbf{ep constant} — Electrical permittivity (relative dielectric constant) assigned uniformly in the model. It affects wave speed and wavelength. It is usually kept constant when the focus is on conductivity/resistivity.
+  \item \textbf{SEGY file} — Path to the input SEG-Y file containing the resistivity model. Defaults to \texttt{examples/Fault\_1.sgy} if configured in Step 00. Uniform permittivity for \texttt{ep.rss} is set from the FD design (\texttt{eps\_r\_used} in section 4 / \texttt{setup\_metadata.json}), not from a separate constant.
 
   \item \textbf{tx0 (m), tz0 (m), dtx (m), ntx} — Transmitter (source) geometry: first source position in $x$ and $z$, spacing between sources, and number of sources. All positions must lie inside the model bounds.
 
@@ -325,7 +323,7 @@ View 2D inversion results: select a run (\texttt{RunN}) and model (\texttt{sg0},
 
   \item \textbf{x (m), z (m), Freqs (Hz)} — Slice positions and frequencies for comparison.
 
-  \item \textbf{Load real data / Load synthetics from run / Generate synthetics from model} — Data comparison options. \textbf{Generate synthetics} runs FD for the selected model using \texttt{nproc} MPI processes.
+  \item \textbf{Load real data / Load synthetics from run / Generate synthetics from model} — Data comparison options. \textbf{Generate synthetics} runs FD for the selected model using \texttt{nproc} MPI processes. It always refreshes \texttt{ep.rss} from \texttt{workspace/2D/forward/} and checks that its permittivity matches \texttt{eps\_r\_used} in \texttt{setup\_metadata.json} from Step 01 (not the legacy ADI default of 7).
 
   \item \textbf{component, plot, frequency, tx, local rx, trace idx} — Display selectors (same as Step 02).
 

@@ -284,13 +284,16 @@ def write_sg_ep_rss(
     oz,
     sg_path,
     ep_path,
-    ep_value=7.0,
+    ep_value,
     ny_samples=1,
     dy=None,
     oy=0.0,
     an_path=None,
 ):
     """Write conductivity (sg) and permittivity (ep) RSS files.
+
+    `ep_value` is the uniform relative permittivity (eps_r) written to ep.rss.
+    For the 2D explicit workflow this should be the FD design's `eps_r_used`.
 
     For 2D modelling keep ny_samples=1. For 2.5D/3D workflows, set ny_samples>1
     and optionally provide an_path to also write an anisotropy model of ones.
