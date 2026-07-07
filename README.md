@@ -8,9 +8,14 @@ Install these before starting:
 
 - Python 3.10+
 - `mpirun` (OpenMPI or compatible MPI runtime)
-- RockEM suite binaries at:
-  `~/software/rockem-suite/bin/mpiEmmodADITE2d`
-  `~/software/rockem-suite/bin/mpiEminvADITE2d`
+- A validated rockem-suite checkout, built (`make mpi`), with the **explicit**
+  TE2D engine binaries at:
+  `$ROCKEM_SUITE_ROOT/bin/mpiEmmodTE2d`
+  `$ROCKEM_SUITE_ROOT/bin/mpiEminvTE2d`
+  (`ROCKEM_SUITE_ROOT` defaults to `~/software/new_rockem/rockem-suite` -
+  see `scripts/modules/rockem_bridge.py`. The ADI TE2D engine,
+  `mpiEmmodADITE2d`/`mpiEminvADITE2d`, is NOT used by this workshop - it
+  fails rockem-suite's own layered-model Green's-function validation.)
 
 ### Environment setup
 
@@ -35,7 +40,7 @@ pip install --upgrade pip
 With your environment activated, install the required Python packages:
 
 ```bash
-pip install voila ipywidgets plotly numpy ipykernel matplotlib scipy segyio
+pip install voila ipywidgets plotly numpy ipykernel matplotlib scipy segyio joblib
 ```
 
 | Package     | Purpose |
@@ -48,6 +53,7 @@ pip install voila ipywidgets plotly numpy ipykernel matplotlib scipy segyio
 | matplotlib  | Plotting (used by workshop modules) |
 | scipy       | Scientific computing (used by workshop modules) |
 | segyio      | Read/write SEG-Y files (required by 01_fw_setup) |
+| joblib      | Parallelizes the 1D inversion's Tx x seed ensemble across CPU cores (05) |
 
 **Conda users:** After installing, register the kernel so Voila can find it:
 
@@ -58,51 +64,95 @@ python -m ipykernel install --user --name=em_workshop --display-name="Python (em
 ## 2) Get the workshop
 
 ```bash
-git clone git@github.com:wiktorwe/EM_inversion_workshop.git
-cd EM_inversion_workshop
+git clone git@github.com:wiktorwe/EM_inversion_workshop_private.git
+cd EM_inversion_workshop_private
 ```
 
-## 3) Run the workshop GUIs
+## 3) Configure and run the workshop GUIs
 
 Launch each step from the project root:
 
 ```bash
+./start_00_configure.sh
 ./start_01_fw_setup.sh
-./start_02_visualization.sh
-./start_03_inversion.sh
-./start_04_results.sh
+./start_02_fwmodelling_and_data_visualization.sh
+./start_03_2d_inversion.sh
+./start_04_2d_inversion_results.sh
+./start_05_1d_inversion.sh
+./start_06_1d_inversion_results.sh
 ```
 
-Each command starts a Voila app for that stage.
+**Step 00** writes `workshop_config.json` (rockem-suite path, `mpirun`, default SEG-Y, etc.). Run it once on each machine before the other steps.
 
-## 4) Recommended workflow
+Each command starts a Voila app for that stage. Steps 05/06 are an independent 1D layered inversion against rockem-suite's analytic magnetic line-source solver — run them after 01/02 have produced FD data for at least one Tx gather.
 
-1. **Step 01 - FW setup**
-   - Load a SEG-Y resistivity model.
+### Restore a pristine workspace
+
+To remove all generated artifacts (forward models, inversion runs, results):
+
+```bash
+./clean.sh          # interactive
+./clean.sh -y       # skip confirmation
+./clean.sh --dry-run
+```
+
+This removes `workspace/` plus Voila PID files and caches. It does not delete notebooks, scripts, or the example model in `examples/`.
+
+## 4) Workspace layout
+
+All notebook outputs go under `workspace/` (gitignored):
+
+```
+workspace/
+  2D/
+    forward/              # FD model, mod.cfg, shot gathers (from step 01–02)
+    inversion/
+      input/              # prepared 2D inversion inputs (step 03)
+      Run{N}/             # 2D inversion runs (step 03)
+    results/Run{N}/       # SEG-Y exports from step 04
+  1D/
+    inversion/Run{N}/     # 1D inversion runs (step 05)
+    results/Run{N}/       # SEG-Y exports from step 06
+```
+
+Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
+
+## 5) Recommended workflow
+
+0. **Step 00 — Configure**
+   - Set rockem-suite path, MPI launcher, and default SEG-Y.
+   - Click **Save** (writes `workshop_config.json`).
+
+1. **Step 01 — FW setup**
+   - Load a SEG-Y resistivity model (default: `examples/Fault_1.sgy`).
    - Configure source/survey settings.
    - Click **Generate FD inputs (Finalize setup)**.
-   - This step creates the FD workspace automatically.
+   - Creates `workspace/2D/forward/`.
 
-2. **Step 02 - Visualization**
+2. **Step 02 — FW modelling and data visualization**
    - Run forward modelling.
    - Inspect Hx/Hz data, amplitudes, and phases.
 
-3. **Step 03 - Inversion**
+3. **Step 03 — 2D inversion**
    - Generate inversion inputs.
    - Start inversion and monitor progress.
 
-4. **Step 04 - Results**
+4. **Step 04 — 2D inversion results**
    - Compare models and data.
    - Export outputs as needed.
 
-## 5) Troubleshooting
+5. **Steps 05–06 — 1D inversion and results**
+   - Run 1D layered inversion on FD observations.
+   - Review and export pseudo-2D sections.
+
+## 6) Troubleshooting
 
 - If a step reports missing setup data, run Step 01 first and finalize setup.
 - If modelling cannot start, verify:
   - `mpirun` is available in your shell
-  - `~/software/rockem-suite/bin/mpiEmmodADITE2d` exists
+  - `$ROCKEM_SUITE_ROOT/bin/mpiEmmodTE2d` exists (configure in Step 00 or set the env var) - build with `make mpi` if missing
 - If inversion cannot start, verify:
   - `mpirun` is available in your shell
-  - `~/software/rockem-suite/bin/mpiEminvADITE2d` exists
+  - `$ROCKEM_SUITE_ROOT/bin/mpiEminvTE2d` exists
 - If a GUI does not open, ensure `voila` is installed in the active environment.
 - If you see "No Jupyter kernel for language 'python' found", install `ipykernel` and register the kernel (see Install dependencies above).

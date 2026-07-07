@@ -1,4 +1,15 @@
-"""FD output loading and amplitude/phase extraction helpers."""
+"""FD output loading and amplitude/phase extraction helpers.
+
+Extraction used to time-differentiate Hx/Hz (`np.gradient`) and pick the
+nearest FFT bin with an ad-hoc `|X|/(nt/4)` normalization
+(`estimate_fft`/`compute_amp_phase_for_component`) - both deleted. Replaced
+with the validated `steady_state_phasor` channel-gain-ratio pattern from
+rockem-suite's own validation examples (`doc/examples/*/shared/phasor.py`,
+via `scripts.modules.rockem_bridge`): apply the SAME Hanning-windowed
+phasor extractor to the recorded trace AND the injected wavelet, take the
+ratio. Any convention-dependent scale/window normalization cancels out of
+that ratio - no time-derivative, no phase correction constants needed.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +18,8 @@ from pathlib import Path
 import numpy as np
 
 from third_party.rockseis.io.rsfile import rsfile
+
+from scripts.modules.rockem_bridge import steady_state_phasor
 
 
 def load_rss_traces(path):
@@ -39,65 +52,6 @@ def load_rss_traces(path):
         "rx_z": np.asarray(getattr(f, "GroupZ", np.zeros(ntrace)), dtype=float)[:ntrace],
     }
     return meta
-
-
-def estimate_two_point(trace, dt, freq, t0):
-    """
-    Two-point amplitude/phase estimate aligned with Amp_and_fase.py.
-    """
-    t1 = t0 + 0.25 / freq
-    idx0 = int(round(t0 / dt))
-    idx1 = int(round(t1 / dt))
-    if idx0 < 0 or idx1 >= len(trace):
-        return np.nan, np.nan
-    y0 = trace[idx0]
-    y1 = trace[idx1]
-    amp = np.hypot(y0, y1)
-    theta = np.arctan2(-y1, y0)
-    phi = theta - 2 * np.pi * freq * (idx0 * dt)
-    phi = np.arctan2(np.sin(phi), np.cos(phi))
-    return amp, phi
-
-
-def estimate_two_point_window(trace, dt, freq, start_t, end_t, n_pairs):
-    t0s = np.linspace(start_t, end_t - 0.25 / freq, num=int(n_pairs))
-    amps = []
-    phis = []
-    for t0 in t0s:
-        amp, phi = estimate_two_point(trace, dt, freq, t0)
-        amps.append(amp)
-        phis.append(phi)
-
-    amps = np.asarray(amps, dtype=float)
-    phis = np.asarray(phis, dtype=float)
-    mean_amp = np.nanmean(amps)
-    std_amp = np.nanstd(amps)
-    mean_phi = np.angle(np.nanmean(np.exp(1j * phis)))
-    phi_diffs = np.angle(np.exp(1j * (phis - mean_phi)))
-    std_phi = np.nanstd(phi_diffs)
-    return {
-        "t0s": t0s,
-        "amps": amps,
-        "phis": phis,
-        "mean_amp": mean_amp,
-        "std_amp": std_amp,
-        "mean_phi": mean_phi,
-        "std_phi": std_phi,
-    }
-
-
-def estimate_fft(trace, dt, target_freq):
-    """
-    FFT-based amplitude/phase estimate (from Amp_and_fase.py).
-    Isolates each frequency bin; better for signals with multiple frequencies.
-    """
-    nt = len(trace)
-    freqs = np.fft.fftfreq(nt, d=dt)
-    idx = np.argmin(np.abs(freqs - target_freq))
-    spectrum = np.fft.fft(np.hanning(nt) * trace, axis=0)
-    amp = np.abs(spectrum)[idx] / (nt / 4)
-    phase = np.angle(spectrum)[idx]
-    return amp, phase, freqs[idx]
 
 
 def build_trace_index(src_x, src_z, rx_x, rx_z, decimals=6):
@@ -141,106 +95,75 @@ def build_trace_index(src_x, src_z, rx_x, rx_z, decimals=6):
     }
 
 
-def compute_amp_phase_for_component(
-    traces_data,
-    dt,
-    freqs,
-    start_t,
-    end_t,
-    n_pairs=3,
-):
-    """
-    Compute FFT amplitude/phase for each (freq, trace).
-    If start_t and end_t are provided, slice trace before FFT to exclude transients.
-    n_pairs is ignored (kept for API compatibility).
+def steady_state_gains(traces_data, dt, wavelet, wavelet_dt, freqs, f_min_hz, n_periods_extract=3.0):
+    """Complex channel gain (`trace_phasor / wavelet_phasor`) per (freq, trace).
+
+    Every frequency in `freqs` is extracted over the SAME absolute time
+    window - `n_periods_extract` periods of `f_min_hz` - by scaling each
+    tone's own `n_periods` argument to `steady_state_phasor` as
+    `n_periods_extract * (freq / f_min_hz)`. This keeps a single shared
+    Hann window across the whole multi-tone wavelet (holding an integer
+    number of periods of every commensurate tone, e.g. 2/4/6 kHz sharing a
+    window built from f_min=2 kHz), rather than a different, incompatible
+    window per tone - the standard way to extract several simultaneous CW
+    tones from one steady-state recording without them leaking into each
+    other's estimate. The wavelet is windowed identically (same physical
+    time span, own `wavelet_dt`), so the ratio cancels any convention-
+    dependent scale - no time-derivative or phase-correction constants.
     """
     traces = np.asarray(traces_data, dtype=float)
     if traces.ndim != 2:
         raise ValueError("traces_data must be 2D [nt, ntrace].")
     nt, ntrace = traces.shape
     freqs = np.asarray(freqs, dtype=float)
+    wavelet = np.asarray(wavelet, dtype=float).reshape(-1)
 
-    amp_mean = np.full((len(freqs), ntrace), np.nan, dtype=float)
-    amp_std = np.full((len(freqs), ntrace), 0.0, dtype=float)
-    phi_mean = np.full((len(freqs), ntrace), np.nan, dtype=float)
-    phi_std = np.full((len(freqs), ntrace), 0.0, dtype=float)
-
+    gain = np.full((len(freqs), ntrace), np.nan, dtype=complex)
     for ifreq, freq in enumerate(freqs):
         if freq <= 0:
             continue
+        n_periods_freq = n_periods_extract * (freq / f_min_hz)
+        wav_phasor = steady_state_phasor(wavelet, wavelet_dt, freq, n_periods_freq)
+        if wav_phasor == 0:
+            continue
         for itr in range(ntrace):
-            trace = traces[:, itr]
-            if start_t is not None and end_t is not None:
-                start_idx = int(round(start_t / dt))
-                end_idx = int(round(end_t / dt))
-                start_idx = max(0, min(start_idx, nt - 1))
-                end_idx = max(start_idx + 1, min(end_idx, nt))
-                trace = trace[start_idx:end_idx]
-                if len(trace) < 2:
-                    continue
-            amp, phi, _ = estimate_fft(trace, dt, freq)
-            amp_mean[ifreq, itr] = amp
-            phi_mean[ifreq, itr] = phi
+            tr_phasor = steady_state_phasor(traces[:, itr], dt, freq, n_periods_freq)
+            gain[ifreq, itr] = tr_phasor / wav_phasor
 
     return {
         "nt": nt,
         "ntrace": ntrace,
         "dt": float(dt),
         "freqs": freqs,
-        "amp_mean": amp_mean,
-        "amp_std": amp_std,
-        "phi_mean_rad": phi_mean,
-        "phi_std_rad": phi_std,
+        "gain": gain,
+        "amp_mean": np.abs(gain),
+        "amp_std": np.zeros_like(np.abs(gain)),
+        "phi_mean_rad": np.angle(gain),
+        "phi_std_rad": np.zeros_like(np.angle(gain)),
     }
 
 
-def compute_amp_phase_for_fd_outputs(
-    hx_path,
-    hz_path,
-    freqs,
-    start_t=None,
-    end_t=None,
-    n_pairs=3,
-    apply_time_derivative=False,
-    derivative_method="np_gradient",
-):
-    """
-    End-to-end load + FFT extraction for Hx/Hz RSS outputs.
-    """
+def compute_gains_for_fd_outputs(hx_path, hz_path, wavelet_path, freqs, f_min_hz, n_periods_extract=3.0):
+    """End-to-end load + steady-state channel-gain extraction for Hx/Hz RSS
+    outputs, referenced to the injected wavelet at `wavelet_path`."""
     hx = load_rss_traces(hx_path)
     hz = load_rss_traces(hz_path)
+    wav = load_rss_traces(wavelet_path)
     if hx["ntrace"] != hz["ntrace"]:
         raise ValueError(f"Hx/Hz trace count mismatch: {hx['ntrace']} vs {hz['ntrace']}")
     if abs(hx["dt"] - hz["dt"]) > 1e-12:
         raise ValueError(f"Hx/Hz dt mismatch: {hx['dt']} vs {hz['dt']}")
 
     idx = build_trace_index(hx["src_x"], hx["src_z"], hx["rx_x"], hx["rx_z"])
-    hx_data = np.asarray(hx["data"], dtype=float)
-    hz_data = np.asarray(hz["data"], dtype=float)
-    if apply_time_derivative:
-        if str(derivative_method) != "np_gradient":
-            raise ValueError(
-                f"Unsupported derivative_method={derivative_method!r}. "
-                "Use 'np_gradient'."
-            )
-        hx_data = np.gradient(hx_data, hx["dt"], axis=0)
-        hz_data = np.gradient(hz_data, hz["dt"], axis=0)
+    wavelet_trace = np.asarray(wav["data"], dtype=float)[:, 0]
 
-    hx_out = compute_amp_phase_for_component(
-        hx_data,
-        dt=hx["dt"],
-        freqs=freqs,
-        start_t=start_t,
-        end_t=end_t,
-        n_pairs=n_pairs,
+    hx_out = steady_state_gains(
+        hx["data"], dt=hx["dt"], wavelet=wavelet_trace, wavelet_dt=wav["dt"],
+        freqs=freqs, f_min_hz=f_min_hz, n_periods_extract=n_periods_extract,
     )
-    hz_out = compute_amp_phase_for_component(
-        hz_data,
-        dt=hz["dt"],
-        freqs=freqs,
-        start_t=start_t,
-        end_t=end_t,
-        n_pairs=n_pairs,
+    hz_out = steady_state_gains(
+        hz["data"], dt=hz["dt"], wavelet=wavelet_trace, wavelet_dt=wav["dt"],
+        freqs=freqs, f_min_hz=f_min_hz, n_periods_extract=n_periods_extract,
     )
     return {
         "freqs": hx_out["freqs"],
@@ -255,8 +178,10 @@ def compute_amp_phase_for_fd_outputs(
         "Hx": hx_out,
         "Hz": hz_out,
         "extraction": {
-            "apply_time_derivative": bool(apply_time_derivative),
-            "derivative_method": str(derivative_method),
+            "method": "steady_state_phasor_channel_gain",
+            "f_min_hz": float(f_min_hz),
+            "n_periods_extract": float(n_periods_extract),
+            "wavelet_path": str(wavelet_path),
         },
     }
 
@@ -283,20 +208,19 @@ def save_amp_phase_npz(output_path, result):
         Hx_amp_std=hx["amp_std"],
         Hx_phi_mean_rad=hx["phi_mean_rad"],
         Hx_phi_std_rad=hx["phi_std_rad"],
+        Hx_gain=hx["gain"],
         Hz_amp_mean=hz["amp_mean"],
         Hz_amp_std=hz["amp_std"],
         Hz_phi_mean_rad=hz["phi_mean_rad"],
         Hz_phi_std_rad=hz["phi_std_rad"],
+        Hz_gain=hz["gain"],
     )
 
 
 __all__ = [
     "build_trace_index",
-    "compute_amp_phase_for_component",
-    "compute_amp_phase_for_fd_outputs",
-    "estimate_fft",
-    "estimate_two_point",
-    "estimate_two_point_window",
+    "steady_state_gains",
+    "compute_gains_for_fd_outputs",
     "load_rss_traces",
     "save_amp_phase_npz",
 ]

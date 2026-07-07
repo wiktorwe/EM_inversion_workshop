@@ -1,8 +1,20 @@
-"""FD-design and config helpers for workshop workflows."""
+"""FD-design and config helpers for workshop workflows.
+
+The FD design used to target the ADI TE2D engine at 10x the explicit CFL
+limit (`k_cfl=10` in the old `recommend_dt_from_grid`) - the suite's own
+`validate_layered_1d_model` shows ADI TE2D fails the layered Green's-
+function check (HZ ~178% error) where the explicit engine passes (~1-4%),
+so this workshop now targets the **explicit** engine exclusively
+(`mpiEmmodTE2d`/`mpiEminvTE2d`). `design_explicit_fd` below replaces the
+ADI-era `recommend_design`/`recommend_dt_from_grid`/`recommend_workshop_
+pml_parameters` with rules built on `rockem.utils`' conductive-CFL/PML
+sizing helpers (the same ones the suite's own validated examples use) - see
+`scripts.modules.rockem_bridge` for how those are wired in.
+"""
 
 import re
 from dataclasses import dataclass
-from math import log, pi, sqrt
+from math import floor, pi, sqrt
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
@@ -11,6 +23,7 @@ import numpy as np
 from third_party.rockseis.io.rsfile import rsfile
 from third_party.rockseis.tools.modint import run_modint
 
+from scripts.modules.rockem_bridge import utils as rockem_utils
 
 MU0 = 4 * pi * 1e-7
 EPS0 = 8.854187817e-12
@@ -23,175 +36,191 @@ def skin_depth(f_hz: float, mu_h_per_m: float, sigma_s_per_m: float) -> float:
     return sqrt(2.0 / (omega * mu_h_per_m * sigma_s_per_m))
 
 
-def recommend_grid_spacing(
-    f_max_hz: float,
-    sigma_max_s_per_m: float,
-    mu_h_per_m: float = MU0,
-    points_per_skin: int = 5,
-) -> float:
-    delta_min = skin_depth(f_max_hz, mu_h_per_m, sigma_max_s_per_m)
-    return delta_min / float(points_per_skin)
-
-
 @dataclass
-class GridDtInputs:
-    dx_m: float
-    sigma_max_s_per_m: float
-    mu_h_per_m: float = MU0
-    dim: int = 3
-    k_cfl: float = 10.0
-
-
-@dataclass
-class GridDtOutputs:
-    dt_cfl_s: float
-    dt_wave_cap_s: float
-    dt_grid_diff_cap_s: float
-    dt_adi_s: float
-
-
-def recommend_dt_from_grid(i: GridDtInputs) -> GridDtOutputs:
-    dt_cfl = i.dx_m / (C0 * sqrt(i.dim))
-    dt_wave_cap = i.k_cfl * dt_cfl
-    dt_grid_diff_cap = i.mu_h_per_m * i.sigma_max_s_per_m * i.dx_m * i.dx_m / 4.0
-    dt_adi = min(dt_wave_cap, dt_grid_diff_cap)
-    return GridDtOutputs(dt_cfl, dt_wave_cap, dt_grid_diff_cap, dt_adi)
-
-
-@dataclass
-class DesignInputs:
+class ExplicitDesignInputs:
     f_min_hz: float
     f_max_hz: float
-    sigma_min_s_per_m: float
-    sigma_max_s_per_m: float
-    mu_h_per_m: float = MU0
-    dim: int = 3
-    dx_override_m: Optional[float] = None
-    points_per_skin: int = 5
-    k_cfl: float = 10.0
-
-
-@dataclass
-class DesignOutputs:
-    dx_m: float
-    delta_min_m: float
-    dt_cfl_s: float
-    dt_wave_cap_s: float
-    dt_grid_diff_cap_s: float
-    dt_adi_s: float
-
-
-@dataclass
-class PmlHeuristicInputs:
-    lpml: int
-    dx_m: float
-    dz_m: float
-    f0_hz: float
-    vmax_m_per_s: float
-    target_reflection: float = 1e-6
+    rho_min_ohm_m: float
+    rho_max_ohm_m: float
+    min_offset_m: float
+    max_offset_m: float
+    points_per_skin: int = 8
+    cells_per_min_offset: int = 8
+    tan_delta_floor: float = 50.0
+    eps_r_cap: float = 1000.0
+    sigma_max_clip_s_per_m: Optional[float] = None
+    lpml: int = 13
     kappa_max: float = 11.0
     alpha_fraction_of_omega0: float = 1.0
-    poly_order_m: int = 3
+    aperture_margin_m: float = 60.0
+    dx_round_m: float = 0.05
+    max_depth_offset_m: float = 0.0
 
 
 @dataclass
-class PmlHeuristicOutputs:
-    pml_amax: float
+class ExplicitDesignOutputs:
+    dx_m: float
+    dt_s: float
+    eps_r_used: float
+    explicit_cfl_safety: float
+    sigma_max_s_per_m: float
+    sigma_min_s_per_m: float
+    eps_r_cap_binding: bool
+    apertx_m: float
+    lpml: int
     pml_kmax: float
     pml_smax: float
-    thickness_m: float
+    pml_amax: float
+    delta_induction_m: float
+    depth_margin_m: float
+    min_domain_halfdepth_m: float
+    notes: str
 
 
-def recommend_design(inputs: DesignInputs) -> DesignOutputs:
-    if inputs.dx_override_m is not None and inputs.dx_override_m > 0.0:
-        dx = inputs.dx_override_m
-    else:
-        dx = recommend_grid_spacing(
-            f_max_hz=inputs.f_max_hz,
-            sigma_max_s_per_m=inputs.sigma_max_s_per_m,
-            mu_h_per_m=inputs.mu_h_per_m,
-            points_per_skin=inputs.points_per_skin,
-        )
-    delta_min = skin_depth(inputs.f_max_hz, inputs.mu_h_per_m, inputs.sigma_max_s_per_m)
-    dt_out = recommend_dt_from_grid(
-        GridDtInputs(
-            dx_m=dx,
-            sigma_max_s_per_m=inputs.sigma_max_s_per_m,
-            mu_h_per_m=inputs.mu_h_per_m,
-            dim=inputs.dim,
-            k_cfl=inputs.k_cfl,
-        )
-    )
-    return DesignOutputs(dx, delta_min, dt_out.dt_cfl_s, dt_out.dt_wave_cap_s, dt_out.dt_grid_diff_cap_s, dt_out.dt_adi_s)
+def _safety_from_eps_r(eps_r: float) -> float:
+    """`explicit_cfl_safety` vs. `eps_r`.
+
+    Flat at the repo-wide default 0.95 for the full supported range (up to
+    `eps_r_cap`'s default of 1000) - confirmed directly for the SMALL-
+    offset, offset-limited-dx, off-axis-receiver regime this workshop's
+    default survey sits in (offsets ~13-25 m, dx sized off the minimum
+    offset rather than skin depth, rx_dz=-20 m): a properly-normalized (see
+    the meta-lesson on normalized-vs-absolute comparison) FDTD-vs-analytic
+    check at eps_r=1000 on this exact geometry found `explicit_cfl_safety`
+    from 0.45 up to 0.98 all give the SAME ~0.7% worst-case normalized
+    amplitude error (flat, not correlated with safety/dt at all) - the
+    engine's own `checkStability` only rejects (loudly, `dt >= dt_cfl`) at
+    safety>=1.0. No silent-wrong regime was found anywhere in that range.
+
+    An earlier version of this function interpolated safety DOWN as eps_r
+    climbed past 100 (toward 0.50 at eps_r=1000), based on a since-retracted
+    finding that flat 0.95 gave a "stable but silently wrong" ~2.6x
+    amplitude error at high eps_r on this workshop's own geometry - that
+    finding did not reproduce under a properly-built end-to-end recheck and
+    is believed to have been a comparison/normalization artifact in
+    whatever produced it, not a real CFL-accuracy cliff. Do not resurrect
+    the old interpolation without a fresh, independently-reproduced finding.
+    """
+    return 0.95
 
 
-def lossy_medium_phase_velocity(f_hz: float, mu_h_per_m: float, eps_f_per_m: float, sigma_s_per_m: float) -> float:
-    omega = 2.0 * pi * float(f_hz)
-    ratio = float(sigma_s_per_m) / (omega * float(eps_f_per_m))
-    return sqrt(1.0 / (((float(mu_h_per_m) * float(eps_f_per_m)) / 2.0) * (sqrt(1.0 + ratio * ratio) + 1.0)))
+def design_explicit_fd(inputs: ExplicitDesignInputs) -> ExplicitDesignOutputs:
+    """Size dx/dt/eps_r/safety/PML/aperture for the EXPLICIT TE2D engine
+    from the model's resistivity range, the survey's frequency range, and
+    its offsets - see module docstring. All of these are FD *numerical*
+    parameters (unlike the survey geometry/wavelet, which the workshop
+    keeps user-configurable): they follow deterministically from physics
+    once rho_min/rho_max/f_min/f_max/offsets are fixed, so there is
+    nothing left for a user to usefully hand-tune here.
+    """
+    if inputs.rho_min_ohm_m <= 0.0 or inputs.rho_max_ohm_m <= 0.0:
+        raise ValueError("rho_min/rho_max must be positive.")
+    if inputs.rho_min_ohm_m > inputs.rho_max_ohm_m:
+        raise ValueError("rho_min must be <= rho_max.")
+    if inputs.min_offset_m <= 0.0 or inputs.max_offset_m <= 0.0:
+        raise ValueError("min_offset_m/max_offset_m must be positive.")
 
+    sigma_max = 1.0 / inputs.rho_min_ohm_m
+    if inputs.sigma_max_clip_s_per_m is not None:
+        sigma_max = min(sigma_max, float(inputs.sigma_max_clip_s_per_m))
+    sigma_min = 1.0 / inputs.rho_max_ohm_m
 
-def recommend_pml_parameters(inputs: PmlHeuristicInputs) -> PmlHeuristicOutputs:
-    if inputs.lpml <= 0:
-        raise ValueError("lpml must be > 0.")
-    if inputs.dx_m <= 0.0 or inputs.dz_m <= 0.0:
-        raise ValueError("dx_m and dz_m must be > 0.")
-    if not (0.0 < inputs.target_reflection < 1.0):
-        raise ValueError("target_reflection must be in (0, 1).")
-    if inputs.kappa_max < 1.0:
-        raise ValueError("kappa_max must be >= 1.")
-    if inputs.alpha_fraction_of_omega0 < 0.0:
-        raise ValueError("alpha_fraction_of_omega0 must be >= 0.")
-    if inputs.f0_hz <= 0.0:
-        raise ValueError("f0_hz must be > 0.")
-    if inputs.vmax_m_per_s <= 0.0:
-        raise ValueError("vmax_m_per_s must be > 0.")
-
-    thickness_m = float(inputs.lpml) * min(float(inputs.dx_m), float(inputs.dz_m))
-    m = max(1, int(inputs.poly_order_m))
-    sigma_max = -((m + 1.0) * float(inputs.vmax_m_per_s) * log(float(inputs.target_reflection))) / (2.0 * thickness_m)
-    alpha_max = float(inputs.alpha_fraction_of_omega0) * (2.0 * pi * float(inputs.f0_hz))
-    return PmlHeuristicOutputs(
-        pml_amax=alpha_max,
-        pml_kmax=float(inputs.kappa_max),
-        pml_smax=sigma_max,
-        thickness_m=thickness_m,
-    )
-
-
-def recommend_workshop_pml_parameters(
-    *,
-    lpml: int,
-    dx_m: float,
-    dz_m: float,
-    f0_hz: float,
-    epsr: float = 7.0,
-    sigma_mid_s_per_m: float = 0.255,
-    target_reflection: float = 1e-6,
-    kappa_max: float = 11.0,
-    alpha_fraction_of_omega0: float = 1.0,
-    poly_order_m: int = 3,
-):
-    vmax = lossy_medium_phase_velocity(
-        f_hz=f0_hz,
-        mu_h_per_m=MU0,
-        eps_f_per_m=EPS0 * float(epsr),
-        sigma_s_per_m=float(sigma_mid_s_per_m),
-    )
-    outputs = recommend_pml_parameters(
-        PmlHeuristicInputs(
-            lpml=int(lpml),
-            dx_m=float(dx_m),
-            dz_m=float(dz_m),
-            f0_hz=float(f0_hz),
-            vmax_m_per_s=float(vmax),
-            target_reflection=float(target_reflection),
-            kappa_max=float(kappa_max),
-            alpha_fraction_of_omega0=float(alpha_fraction_of_omega0),
-            poly_order_m=int(poly_order_m),
+    # dx: the more restrictive of induction-based spacing (skin depth at the
+    # most conductive cell, highest frequency) and offset-based spacing (the
+    # near-source geometry, since a survey with sub-skin-depth offsets needs
+    # a finer grid than induction alone would call for - see rockem-suite's
+    # run_near_offset.py for the same "size dx off the minimum offset" idea).
+    grid_out = rockem_utils.suggest_grid_size(
+        rockem_utils.GridRecInputs(
+            f_min_hz=inputs.f_min_hz, f_max_hz=inputs.f_max_hz,
+            sigma_min_s_per_m=sigma_min, sigma_max_s_per_m=sigma_max,
+            eps_r_min=7.0, eps_r_max=7.0,  # eps_r doesn't affect the induction/offset dx rule
+            points_per_skin=inputs.points_per_skin, cells_per_wavelength=10,
         )
     )
-    return outputs, float(vmax)
+    dx_induction = grid_out.delta_induction_m
+    dx_offset = inputs.min_offset_m / float(inputs.cells_per_min_offset)
+    dx_raw = min(dx_induction, dx_offset)
+    dx = floor(dx_raw / inputs.dx_round_m) * inputs.dx_round_m
+    if dx <= 0.0:
+        dx = inputs.dx_round_m
+
+    # eps_r: maximize (subject to a loss-tangent floor at the LEAST
+    # conductive/most sensitive corner, f_max & sigma_min) to buy the
+    # largest legitimate explicit dt - see the rockem-suite skill's
+    # "raising eps_r to relax the explicit CFL limit is legitimate" gotcha.
+    omega_max = 2.0 * pi * inputs.f_max_hz
+    eps_r_raw = sigma_min / (inputs.tan_delta_floor * omega_max * EPS0)
+    eps_r_used = float(np.clip(eps_r_raw, 7.0, inputs.eps_r_cap))
+    eps_r_cap_binding = eps_r_raw > inputs.eps_r_cap
+
+    safety = _safety_from_eps_r(eps_r_used)
+    time_out = rockem_utils.suggest_time_steps(
+        rockem_utils.TimeRecInputs(
+            grid=rockem_utils.GridSpec(dx=dx, dz=dx), eps_r_min=eps_r_used,
+            sigma_max_s_per_m=sigma_max, explicit_cfl_safety=safety, use_grid_diff_cap=False,
+        )
+    )
+    dt = time_out.dt_explicit_cfl_s
+
+    vmax = C0 / sqrt(eps_r_used)
+    pml_out = rockem_utils.suggest_pml_parameters(
+        rockem_utils.PmlRecInputs(
+            lpml=inputs.lpml, dx=dx, dz=dx, f0_hz=inputs.f_max_hz, vmax_m_per_s=vmax,
+            kappa_max=inputs.kappa_max, alpha_fraction_of_omega0=inputs.alpha_fraction_of_omega0,
+        )
+    )
+
+    apertx = 2.0 * inputs.max_offset_m + inputs.aperture_margin_m
+
+    # Depth margin: mirrors apertx's rule (clearance beyond the farthest
+    # SURVEY feature, not a skin-depth-scaled distance - end-to-end testing
+    # found the PML absorbs diffusive fields on its own conductivity, not
+    # geometric standoff, so a fixed margin transfers across resistivity/
+    # frequency choices the same way aperture_margin_m already does for x).
+    # `max_depth_offset_m` is the largest |receiver_z - source_z| in the
+    # survey (0 for the common same-depth convention) - the model must
+    # extend at least this margin beyond THAT depth, in both directions
+    # from the source depth, before hitting the PML - see
+    # `scripts.modules.segy.pad_resistivity_for_depth_margin`, which pads
+    # a loaded model that falls short of this instead of silently trusting
+    # whatever depth range the SEG-Y file happened to cover.
+    depth_margin = inputs.aperture_margin_m
+    min_domain_halfdepth = abs(inputs.max_depth_offset_m) + depth_margin
+
+    notes = (
+        f"dx=min(induction {dx_induction:.4f} m, offset {dx_offset:.4f} m)={dx_raw:.4f} m "
+        f"-> rounded down to {dx:.4f} m; eps_r={'CAPPED at' if eps_r_cap_binding else 'set to'} "
+        f"{eps_r_used:.1f} (tan_delta_floor={inputs.tan_delta_floor:.0f} at f_max/sigma_min); "
+        f"explicit_cfl_safety={safety:.2f}; min_domain_halfdepth={min_domain_halfdepth:.2f} m "
+        f"from source depth (max_depth_offset={inputs.max_depth_offset_m:.2f} m + "
+        f"margin={depth_margin:.2f} m)"
+    )
+    return ExplicitDesignOutputs(
+        dx_m=dx, dt_s=dt, eps_r_used=eps_r_used, explicit_cfl_safety=safety,
+        sigma_max_s_per_m=sigma_max, sigma_min_s_per_m=sigma_min, eps_r_cap_binding=eps_r_cap_binding,
+        apertx_m=apertx, lpml=inputs.lpml, pml_kmax=pml_out.pml_kmax, pml_smax=pml_out.pml_smax,
+        pml_amax=pml_out.pml_amax, delta_induction_m=dx_induction,
+        depth_margin_m=depth_margin, min_domain_halfdepth_m=min_domain_halfdepth, notes=notes,
+    )
+
+
+def estimate_nt_and_cost(dt_s: float, rec_time_s: float, apertx_m: float, domain_depth_m: float,
+                          dx_m: float, lpml: int, cost_per_cell_update_s: float = 2e-8) -> dict:
+    """Rough nt/wall-time estimate for the design-check cell - see
+    `ExplicitDesignOutputs.notes` for the underlying dx/dt/eps_r choices.
+    `cost_per_cell_update_s` is a rule-of-thumb placeholder (order 1e-8 to
+    1e-7 s/cell-update on a modern CPU core, engine- and machine-dependent)
+    until measured directly on real hardware."""
+    nt = int(rec_time_s / dt_s) + 1
+    nx_cells = apertx_m / dx_m + 2 * lpml
+    nz_cells = domain_depth_m / dx_m + 2 * lpml
+    cells = nx_cells * nz_cells
+    wall_s = nt * cells * cost_per_cell_update_s
+    return {
+        "nt": nt, "cells": cells, "wall_s_estimate": wall_s,
+        "warn_heavy": nt > 3e5, "warn_very_heavy": nt > 1e6,
+    }
 
 
 def interpolate_rss_python(in_path, out_path, d1f=None, d3f=None, method="bspline", antialias=True):
@@ -333,15 +362,15 @@ def update_modcfg_for_workshop(
 
 
 __all__ = [
-    "DesignInputs",
-    "DesignOutputs",
-    "PmlHeuristicInputs",
-    "PmlHeuristicOutputs",
+    "ExplicitDesignInputs",
+    "ExplicitDesignOutputs",
+    "design_explicit_fd",
+    "estimate_nt_and_cost",
     "enforce_rss_min_value",
     "interpolate_rss_python",
-    "lossy_medium_phase_velocity",
-    "recommend_pml_parameters",
-    "recommend_design",
-    "recommend_workshop_pml_parameters",
+    "read_cfg_values",
+    "update_cfg_values",
     "update_modcfg_for_workshop",
+    "skin_depth",
+    "C0",
 ]

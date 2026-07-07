@@ -215,6 +215,62 @@ def write_resistivity_to_segy_from_template(
     }
 
 
+def pad_resistivity_for_depth_margin(resistivity, oz, dz, source_z_m, min_domain_halfdepth_m):
+    """Pad `resistivity` (nz, nx) in depth (edge-value replication) if its
+    z-extent doesn't give at least `min_domain_halfdepth_m` of clearance
+    above AND below `source_z_m` before the FD domain's PML would start.
+
+    A model that falls short of this margin can be numerically STABLE but
+    measurably wrong relative to the 1D analytic reference even in a
+    genuinely 1D region - the PML has no signal to distinguish "real
+    layering" from "clipped by a too-shallow model", so it just absorbs
+    whatever reaches it (end-to-end testing found errors climbing from
+    <1% at 55 m of clearance to ~55% at 20 m, for `EM_inversion_workshop`'s
+    own survey geometry - see the rockem-suite skill's gotchas). This is
+    the depth-direction analogue of `design_explicit_fd`'s `apertx` margin,
+    which the workshop already applies in x; nothing analogous previously
+    existed for z, since z-extent came from whatever the SEG-Y file covered.
+
+    Assumes `dz > 0` (depth increasing with sample index, the standard
+    SEG-Y/rockseis convention `read_resistivity_from_segy` returns).
+
+    Returns `(resistivity_padded, oz_new, info)` where `info` is a dict
+    with `padded` (bool), `n_top`/`n_bottom` (cells added), and
+    `top_added_m`/`bottom_added_m` - use these to compose a user-facing
+    message when padding occurs.
+    """
+    resistivity = np.asarray(resistivity, dtype=np.float64)
+    if resistivity.ndim != 2:
+        raise ValueError(f"Expected resistivity with 2D shape (nz, nx), got {resistivity.shape}")
+    if dz <= 0.0:
+        raise ValueError(f"dz must be positive (depth increasing with sample index), got {dz}")
+
+    nz = resistivity.shape[0]
+    current_top_z = float(oz)
+    current_bottom_z = float(oz) + dz * (nz - 1)
+    required_top_z = float(source_z_m) - float(min_domain_halfdepth_m)
+    required_bottom_z = float(source_z_m) + float(min_domain_halfdepth_m)
+
+    n_top = max(0, int(np.ceil((current_top_z - required_top_z) / dz - 1e-9)))
+    n_bottom = max(0, int(np.ceil((required_bottom_z - current_bottom_z) / dz - 1e-9)))
+
+    info = {
+        "padded": bool(n_top > 0 or n_bottom > 0),
+        "n_top": n_top,
+        "n_bottom": n_bottom,
+        "top_added_m": n_top * dz,
+        "bottom_added_m": n_bottom * dz,
+        "required_top_z": required_top_z,
+        "required_bottom_z": required_bottom_z,
+    }
+    if not info["padded"]:
+        return resistivity, float(oz), info
+
+    padded = np.pad(resistivity, ((n_top, n_bottom), (0, 0)), mode="edge")
+    oz_new = float(oz) - n_top * dz
+    return padded, oz_new, info
+
+
 def save_resistivity_npz(output_path, resistivity, oz, dz, dx, x, z):
     """Save resistivity and sampling metadata to NPZ."""
     np.savez(output_path, resistivity=resistivity, oz=oz, dz=dz, dx=dx, x=x, z=z)
@@ -270,6 +326,7 @@ __all__ = [
     "read_resistivity_from_segy",
     "read_segy_template_metadata",
     "resample_resistivity_to_template_grid",
+    "pad_resistivity_for_depth_margin",
     "save_resistivity_npz",
     "write_resistivity_to_segy_from_template",
     "write_sg_ep_rss",

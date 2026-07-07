@@ -1,8 +1,13 @@
 #!/bin/sh
 set -eu
 
+# Points at the validated rockem-suite checkout - see scripts/modules/
+# rockem_bridge.py for why this must NOT be the old ~/software/rockem-suite
+# (stale, pre-CFL/source-scaling-fix checkout).
+ROCKEM_SUITE_ROOT="${ROCKEM_SUITE_ROOT:-$HOME/software/new_rockem/rockem-suite}"
+
 META_PATH="setup_metadata.json"
-ENGINE="mpiEmmodADITE2d"
+ENGINE="mpiEmmodTE2d"
 CFG="mod.cfg"
 
 if [ -f "$META_PATH" ]; then
@@ -11,7 +16,7 @@ import json
 from pathlib import Path
 
 meta = json.loads(Path("setup_metadata.json").read_text())
-engine = str(meta.get("forward_engine", "mpiEmmodADITE2d"))
+engine = str(meta.get("forward_engine", "mpiEmmodTE2d"))
 cfg = str(meta.get("forward_cfg", "mod.cfg"))
 print(engine)
 print(cfg)
@@ -21,4 +26,4 @@ PY
   CFG=$(printf "%s" "$MODE_DATA" | sed -n '2p')
 fi
 
-mpirun "$HOME/software/rockem-suite/bin/$ENGINE" "$CFG"
+mpirun "$ROCKEM_SUITE_ROOT/bin/$ENGINE" "$CFG"

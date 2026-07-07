@@ -14,16 +14,17 @@ __pycache__/
 # Local runtime PID files
 .voila*.pid
 
-# Generated inversion/FD outputs
-FDmodel/
+# User workshop config (machine-specific paths)
+workshop_config.json
 
-InversionRun*/log.txt-*
-InversionRun*/mpiqueue.log
-InversionRun*/inversion.log
-InversionRun*/progress.log
-InversionRun*/inversion_setup_metadata.json
-InversionRun*/
+# All generated workshop artifacts
+workspace/
+
+# Legacy generated paths (pre-reorg cleanup)
+FDmodel/
 InversionInput/
+InversionRun*/
+Results/
 
 # Generated LaTeX artifacts
 *.aux

@@ -155,6 +155,7 @@ def write_inv_cfg(
     dtx: float,
     dtz: float,
     input_file_values: Dict[str, str],
+    tik_sgregalpha: Optional[float] = None,
 ) -> Dict[str, str]:
     template_cfg = Path(template_cfg)
     output_cfg = Path(output_cfg)
@@ -165,6 +166,8 @@ def write_inv_cfg(
         "dtx": f"{float(dtx):.6f}",
         "dtz": f"{float(dtz):.6f}",
     }
+    if tik_sgregalpha is not None:
+        updates["tik_sgregalpha"] = f"{float(tik_sgregalpha):.6g}"
     updates.update(input_file_values)
     return update_cfg_values(output_cfg, updates)
 
@@ -180,6 +183,7 @@ def prepare_inversion_inputs(
     initial_model_mode: str = "uniform_resistivity",
     uniform_conductivity: Optional[float] = None,
     uniform_resistivity: Optional[float] = None,
+    tik_sgregalpha: Optional[float] = None,
 ) -> Dict[str, Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -203,8 +207,12 @@ def prepare_inversion_inputs(
         weight_path=output_dir / "weight.rss",
     )
     mod_cfg_values = read_cfg_values(Path(fdmodel_dir) / "mod.cfg")
+    # Pin order/lpml/PML params to the exact forward-run values - a mismatch
+    # here (e.g. inv.cfg's own template lpml drifting from mod.cfg's) would
+    # make the FWI's re-modelled wavefield subtly inconsistent with the
+    # forward data it's fitting, independent of any real model update.
     pml_updates = {}
-    for key in ("pml_kmax", "pml_smax", "pml_amax"):
+    for key in ("pml_kmax", "pml_smax", "pml_amax", "order", "lpml"):
         value = mod_cfg_values.get(key)
         if value is not None:
             pml_updates[key] = value
@@ -216,6 +224,7 @@ def prepare_inversion_inputs(
         apertx=apertx,
         dtx=dtx,
         dtz=dtz,
+        tik_sgregalpha=tik_sgregalpha,
         input_file_values={
             "Sg": "sg0.rss",
             "Ep": "ep.rss",
