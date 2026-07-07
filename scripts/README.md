@@ -8,7 +8,12 @@ This folder is the module-oriented script codebase used by the GUI notebooks
 - `workshop_config.py`: loads/saves `workshop_config.json` at the repo root
   (rockem-suite path, MPI launcher, default SEG-Y, workspace dir, optional GPU
   flags for 2D TE2D forward/inversion). Import via `load_config()` before
-  `rockem_bridge`. `validate_config()` checks CPU/GPU binaries and `nvidia-smi`.
+  `rockem_bridge`. Key helpers:
+  - `forward_engine_te2d()` / `inversion_engine_te2d()` — CPU or GPU binary name
+  - `validate_config()` — checks CPU binaries (required), GPU binaries and
+    `nvidia-smi` (required when GPU flags are on)
+  - `patch_runinv_template()` — inject MPI launcher and inversion binary into
+    `runinv.sh` (used by Step 03)
 - `rockem_bridge.py`: locates the validated `rockem-suite` checkout (default
   `~/software/new_rockem/rockem-suite`, override via `ROCKEM_SUITE_ROOT`), puts
   its `python/` package and the layered Green's-function solver's `shared/`
@@ -47,10 +52,11 @@ This folder is the module-oriented script codebase used by the GUI notebooks
 - `mod3d.cfg`: 3D forward-modelling config template (legacy ADI path -
   unvalidated by the 2D redesign, see `02_fwmodelling_and_data_visualization`'s markdown).
 - `inv.cfg`: 2D inversion config template (explicit TE2D engine).
-- `runmod.sh` / `runinv.sh`: run scripts invoking `mpiEmmodTE2d`/
-  `mpiEminvTE2d` at `$ROCKEM_SUITE_ROOT/bin` (default
-  `~/software/new_rockem/rockem-suite`, override via the `ROCKEM_SUITE_ROOT`
-  environment variable).
+- `runmod.sh` / `runinv.sh`: run scripts invoking the explicit TE2D engine at
+  `$ROCKEM_SUITE_ROOT/bin` (CPU: `mpiEmmodTE2d` / `mpiEminvTE2d`; GPU:
+  `mpiEmmodTE2dGpu` / `mpiEminvTE2dGpu` when enabled in Step 00). `runmod.sh`
+  reads the forward engine from `setup_metadata.json`; Step 03 patches
+  `runinv.sh` from the template via `patch_runinv_template()`.
 - `clean.sh`: removes generated FD/inversion outputs from a run directory.
 
 Other utilities:

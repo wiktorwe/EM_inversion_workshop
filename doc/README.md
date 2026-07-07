@@ -47,7 +47,7 @@ workspace/
     results/Run{N}/       # Step 06: SEG-Y exports
 ```
 
-Machine-specific settings are stored in `workshop_config.json` (gitignored), written by **Step 00 — Configure**.
+Machine-specific settings are stored in `workshop_config.json` (gitignored), written by **Step 00 — Configure**. Fields include the rockem-suite path, MPI launcher, default SEG-Y, workspace directory, and optional GPU flags (`use_gpu_forward_2d`, `use_gpu_inversion_2d`) for 2D TE2D forward and inversion.
 
 To restore a pristine checkout:
 

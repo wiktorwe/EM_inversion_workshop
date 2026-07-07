@@ -22,7 +22,7 @@ This manual describes how to set up a Python environment, configure machine-spec
 
 The seven GUIs are:
 \begin{itemize}
-  \item \textbf{00\_configure\_workshop} — Set rockem-suite path, MPI launcher, default SEG-Y, and other machine-specific settings.
+  \item \textbf{00\_configure\_workshop} — Set rockem-suite path, MPI launcher, default SEG-Y, optional GPU engines for 2D forward/inversion, and other machine-specific settings.
   \item \textbf{01\_fw\_setup} — Prepare FD modelling inputs from a SEG-Y file.
   \item \textbf{02\_fwmodelling\_and\_data\_visualization} — Run FD modelling and visualize channel-gain amplitude/phase from shot records.
   \item \textbf{03\_2d\_inversion} — Generate inversion inputs and run the 2D inversion locally.
@@ -70,6 +70,13 @@ Before setting up Python, ensure you have:
   \item \texttt{mpirun} (OpenMPI or compatible MPI runtime)
   \item A validated \texttt{rockem-suite} checkout, built with \texttt{make mpi}, with the \textbf{explicit} TE2D engine binaries \texttt{mpiEmmodTE2d} and \texttt{mpiEminvTE2d} under its \texttt{bin/} directory. Their location is \texttt{\$ROCKEM\_SUITE\_ROOT/bin}, where \texttt{ROCKEM\_SUITE\_ROOT} is set by Step 00 (or defaults to \texttt{\textasciitilde/software/new\_rockem/rockem-suite}; see \texttt{scripts/modules/rockem\_bridge.py}). The ADI TE2D engine (\texttt{mpiEmmodADITE2d}/\texttt{mpiEminvADITE2d}) is \textbf{not} used by this workshop — it fails rockem-suite's own layered-model Green's-function validation.
 \end{itemize}
+
+\textbf{Optional — GPU acceleration (2D TE2D only):} On a machine with an NVIDIA GPU and CUDA toolkit, you can build the GPU variants \texttt{mpiEmmodTE2dGpu} and \texttt{mpiEminvTE2dGpu} in rockem-suite:
+\begin{quote}
+  \texttt{make -f Makefile.gpu MPI\_CXX=mpic++ RS\_CUDA\_ARCH=<arch> CUDA\_HOME=\$CUDA\_HOME \textbackslash}\\
+  \texttt{\ \ \ \ bin/mpiEmmodTE2dGpu bin/mpiEminvTE2dGpu}
+\end{quote}
+Enable them in Step 00 (\textbf{Use GPU for 2D forward/inversion}). Step 00 \textbf{Validate} checks \texttt{nvidia-smi} and the GPU binaries when those options are on. GPU forward requires re-running Step 01 \textbf{Finalize setup} so \texttt{setup\_metadata.json} records the GPU engine; GPU inversion is applied when Step 03 writes \texttt{runinv.sh}.
 
 \subsection{Creating a virtual environment (venv)}
 
@@ -151,7 +158,7 @@ Each start script writes its own Voila PID file (e.g.\ \texttt{.voila\_fw\_setup
 %=============================================================================
 
 \begin{enumerate}
-  \item \textbf{Step 00 — Configure} — Set \texttt{rockem-suite} root, MPI launcher (\texttt{mpirun}), default process count, default SEG-Y (\texttt{examples/Fault\_1.sgy}), and workspace directory name. Click \textbf{Validate} to check binaries and paths, then \textbf{Save} to write \texttt{workshop\_config.json}.
+  \item \textbf{Step 00 — Configure} — Set \texttt{rockem-suite} root, MPI launcher (\texttt{mpirun}), default process count, default SEG-Y (\texttt{examples/Fault\_1.sgy}), workspace directory name, and optional GPU flags for 2D forward (\texttt{mpiEmmodTE2dGpu}) and inversion (\texttt{mpiEminvTE2dGpu}). Click \textbf{Validate} to check CPU/GPU binaries, \texttt{nvidia-smi}, and paths, then \textbf{Save} to write \texttt{workshop\_config.json}.
   \item \textbf{Step 01 — FW setup} — Load a SEG-Y resistivity model, configure survey and FD design, then \textbf{Generate FD inputs (Finalize setup)}. Outputs go to \texttt{workspace/2D/forward/}.
   \item \textbf{Step 02 — FW modelling and data visualization} — Run forward modelling, load \texttt{Hxshot.rss}/\texttt{Hzshot.rss}, compute channel-gain amplitude/phase, and inspect results.
   \item \textbf{Step 03 — 2D inversion} — Generate inversion inputs into \texttt{workspace/2D/inversion/input/}, then run inversion into \texttt{workspace/2D/inversion/RunN/}.
@@ -176,7 +183,18 @@ Configure machine-specific paths before running the other notebooks. Settings ar
   \item \textbf{nproc} — Default number of MPI processes for FD and inversion runs (can still be changed per GUI).
   \item \textbf{default SEG-Y} — Default resistivity model path pre-filled in Step 01 and used as fallback for SEG-Y export in Steps 04 and 06. The workshop includes \texttt{examples/Fault\_1.sgy}.
   \item \textbf{workspace} — Name of the generated-artifacts directory (default \texttt{workspace}).
-  \item \textbf{Buttons} — \textbf{Validate} checks rockem-suite binaries, \texttt{mpirun}, default SEG-Y, and the analytic solver; \textbf{Save} writes \texttt{workshop\_config.json}; \textbf{Reset defaults} restores built-in defaults without saving; \textbf{Quit Voila} stops the server.
+  \item \textbf{Use GPU for 2D forward} — When enabled, Steps 01, 02, and 04 use \texttt{mpiEmmodTE2dGpu} instead of \texttt{mpiEmmodTE2d}. Requires the GPU binary and a working NVIDIA driver (\texttt{nvidia-smi}). After enabling, re-run Step 01 \textbf{Finalize setup}.
+  \item \textbf{Use GPU for 2D inversion} — When enabled, Step 03 writes \texttt{runinv.sh} with \texttt{mpiEminvTE2dGpu} instead of \texttt{mpiEminvTE2d}.
+  \item \textbf{Buttons} — \textbf{Validate} checks CPU binaries (required), GPU binaries and \texttt{nvidia-smi} (required when GPU options are on; informational otherwise), \texttt{mpirun}, default SEG-Y, and the analytic solver; \textbf{Save} writes \texttt{workshop\_config.json}; \textbf{Reset defaults} restores built-in defaults without saving; \textbf{Quit Voila} stops the server.
+\end{itemize}
+
+\subsection{Configuration file fields}
+
+When saved, \texttt{workshop\_config.json} includes:
+\begin{itemize}
+  \item \texttt{rockem\_suite\_root}, \texttt{mpirun}, \texttt{nproc\_default}, \texttt{default\_segy}, \texttt{workspace\_dir}
+  \item \texttt{use\_gpu\_forward\_2d} — \texttt{true}/\texttt{false}
+  \item \texttt{use\_gpu\_inversion\_2d} — \texttt{true}/\texttt{false}
 \end{itemize}
 
 %=============================================================================
@@ -207,7 +225,7 @@ Generate finite-difference (FD) modelling inputs from a SEG-Y resistivity model:
 
   \item \textbf{alpha} — Ramp parameter (0--1) for the ramp square-wave wavelet.
 
-  \item \textbf{f\_min (Hz), f\_max (Hz)} — Frequency range used to design the FD grid for the \textbf{explicit} engine (\texttt{mpiEmmodTE2d}). Grid spacing, time step, \texttt{eps\_r}, PML, and depth margin follow deterministically from these plus \texttt{rho\_min}/\texttt{rho\_max} and receiver offsets.
+  \item \textbf{f\_min (Hz), f\_max (Hz)} — Frequency range used to design the FD grid for the \textbf{explicit} engine (\texttt{mpiEmmodTE2d} or \texttt{mpiEmmodTE2dGpu} when GPU forward is enabled in Step 00). Grid spacing, time step, \texttt{eps\_r}, PML, and depth margin follow deterministically from these plus \texttt{rho\_min}/\texttt{rho\_max} and receiver offsets.
 
   \item \textbf{rho\_min (Ohm-m), rho\_max (Ohm-m)} — Expected resistivity range in the model. Grid spacing is sized from skin depth and minimum receiver offset; \texttt{eps\_r} is sized from \texttt{rho\_max}/\texttt{f\_max}.
 
@@ -227,11 +245,11 @@ Generate finite-difference (FD) modelling inputs from a SEG-Y resistivity model:
 
 \subsection{Purpose}
 
-Run FD modelling (via \texttt{workspace/2D/forward/runmod.sh} and the explicit-engine MPI binary), load \texttt{Hxshot.rss} and \texttt{Hzshot.rss} outputs from \texttt{workspace/2D/forward/Data/}, compute steady-state channel-gain amplitude and phase, and visualize or save the results.
+Run FD modelling (via \texttt{workspace/2D/forward/runmod.sh} and the explicit-engine MPI binary selected in Step 00), load \texttt{Hxshot.rss} and \texttt{Hzshot.rss} outputs from \texttt{workspace/2D/forward/Data/}, compute steady-state channel-gain amplitude and phase, and visualize or save the results.
 
 \subsection{External requirement}
 
-The explicit-engine MPI FD binary (\texttt{\$ROCKEM\_SUITE\_ROOT/bin/mpiEmmodTE2d}) must be installed. Step 00 (or \texttt{ROCKEM\_SUITE\_ROOT}) must point at a valid checkout; \texttt{runmod.sh} in the forward workspace uses the same setting.
+The explicit-engine MPI FD binary must be installed: \texttt{mpiEmmodTE2d} (CPU) or \texttt{mpiEmmodTE2dGpu} (GPU). The engine name is stored in \texttt{workspace/2D/forward/setup\_metadata.json} when Step 01 finalizes setup. Step 00 (or \texttt{ROCKEM\_SUITE\_ROOT}) must point at a valid checkout; \texttt{runmod.sh} reads the engine from that metadata.
 
 \subsection{Parameters (physical meaning and impact)}
 
@@ -261,7 +279,7 @@ Generate inversion inputs from \texttt{workspace/2D/forward/} and the inversion 
 
 \subsection{External requirement}
 
-The explicit-engine MPI inversion binary (\texttt{\$ROCKEM\_SUITE\_ROOT/bin/mpiEminvTE2d}) must be installed.
+The explicit-engine MPI inversion binary must be installed: \texttt{mpiEminvTE2d} (CPU) or \texttt{mpiEminvTE2dGpu} (GPU). Step 03 writes \texttt{runinv.sh} with the engine selected in Step 00 (\texttt{scripts/modules/workshop\_config.patch\_runinv\_template}).
 
 \subsection{Parameters (physical meaning and impact)}
 
@@ -378,8 +396,9 @@ Visualize and export 1D inversion results from Step 05: pseudo-2D section (mean 
   \item \textbf{Missing \texttt{segyio}} — Install \texttt{segyio} and start Voila from the workshop root.
   \item \textbf{No Jupyter kernel for language `python' found} — Install \texttt{ipykernel} and register the \texttt{em\_workshop} kernel (see Environment setup).
   \item \textbf{SEGY export cannot find template} — Export expects \texttt{segy\_template\_path} in \texttt{workspace/2D/forward/setup\_metadata.json}, with fallback to the default SEG-Y from Step 00. Run Step 01 and finalize setup first.
-  \item \textbf{Missing explicit-engine MPI FD binary} — Steps 02 and 04 need \texttt{mpiEmmodTE2d}. Validate in Step 00; build with \texttt{make mpi} if missing.
-  \item \textbf{Missing explicit-engine MPI inversion binary} — Step 03 needs \texttt{mpiEminvTE2d}.
+  \item \textbf{Missing explicit-engine MPI FD binary} — Steps 02 and 04 need \texttt{mpiEmmodTE2d} (or \texttt{mpiEmmodTE2dGpu} if GPU forward is enabled). Validate in Step 00; build CPU with \texttt{make mpi}, GPU with \texttt{make -f Makefile.gpu bin/mpiEmmodTE2dGpu}.
+  \item \textbf{Missing explicit-engine MPI inversion binary} — Step 03 needs \texttt{mpiEminvTE2d} (or \texttt{mpiEminvTE2dGpu} if GPU inversion is enabled).
+  \item \textbf{GPU validation fails} — Ensure \texttt{nvidia-smi} works, CUDA is installed, and GPU binaries exist under \texttt{\$ROCKEM\_SUITE\_ROOT/bin/}. Build targets in rockem-suite as shown in Environment setup. If you enabled GPU forward after Step 01, re-run \textbf{Finalize setup} in Step 01.
   \item \textbf{Wrong/stale rockem-suite checkout} — Step 00 validation checks for \texttt{magnetic\_line\_source\_fields\_layered} in the analytic solver shared directory.
   \item \textbf{Missing \texttt{joblib}} — Step 05 needs \texttt{joblib} for parallel ensemble runs.
   \item \textbf{Stale artifacts} — Run \texttt{./clean.sh} to remove \texttt{workspace/} and start fresh.
@@ -390,7 +409,7 @@ Visualize and export 1D inversion results from Step 05: pseudo-2D section (mean 
 %=============================================================================
 
 \begin{itemize}
-  \item \texttt{workshop\_config.json} — Machine-specific settings (Step 00; gitignored).
+  \item \texttt{workshop\_config.json} — Machine-specific settings (Step 00; gitignored): rockem-suite path, MPI launcher, default SEG-Y, workspace dir, \texttt{use\_gpu\_forward\_2d}, \texttt{use\_gpu\_inversion\_2d}.
   \item \texttt{workspace/2D/forward/} — FD inputs and outputs (\texttt{mod.cfg}, \texttt{sg.rss}, \texttt{Survey.rss}, \texttt{Data/}).
   \item \texttt{workspace/2D/inversion/input/} — 2D inversion input files (\texttt{inv.cfg}, \texttt{sg0.rss}, etc.).
   \item \texttt{workspace/2D/inversion/Run0/}, \texttt{Run1/}, \ldots — 2D inversion run directories (Steps 03/04).

@@ -17,6 +17,18 @@ Install these before starting:
   `mpiEmmodADITE2d`/`mpiEminvADITE2d`, is NOT used by this workshop - it
   fails rockem-suite's own layered-model Green's-function validation.)
 
+**Optional — GPU (2D TE2D only):** On an NVIDIA machine, build GPU binaries in rockem-suite:
+
+```bash
+make -f Makefile.gpu MPI_CXX=mpic++ RS_CUDA_ARCH=<arch> CUDA_HOME=$CUDA_HOME \
+  bin/mpiEmmodTE2dGpu bin/mpiEminvTE2dGpu
+```
+
+Enable them in **Step 00** (`use_gpu_forward_2d` / `use_gpu_inversion_2d` in
+`workshop_config.json`). Validation checks `nvidia-smi` and GPU binaries.
+After enabling GPU forward, re-run **Step 01 → Finalize setup** so
+`setup_metadata.json` records the GPU engine.
+
 ### Environment setup
 
 **Option A — Conda**
