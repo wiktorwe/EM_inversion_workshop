@@ -131,6 +131,74 @@ def create_initial_sg0_model(
     return target
 
 
+def _write_uniform_rss_from_reference(
+    ref_path: Path,
+    target_path: Path,
+    value: float,
+) -> Path:
+    ref_path = Path(ref_path)
+    target_path = Path(target_path)
+    if not ref_path.exists():
+        raise FileNotFoundError(f"Missing reference model file: {ref_path}")
+
+    ref = rsfile()
+    ref.read(str(ref_path))
+    arr = np.asarray(ref.data, dtype=np.float64)
+    ref.data = np.asfortranarray(np.full(arr.shape, float(value), dtype=arr.dtype))
+    _ensure_parent(target_path)
+    ref.write(str(target_path))
+    return target_path
+
+
+def create_bound_files(
+    fdmodel_dir: Path,
+    output_dir: Path,
+    sg_min: float,
+    sg_max: float,
+    ep_min: Optional[float] = None,
+    ep_max: Optional[float] = None,
+) -> Dict[str, Path]:
+    fdmodel_dir = Path(fdmodel_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    sg_ref = output_dir / "sg0.rss"
+    if not sg_ref.exists():
+        sg_ref = fdmodel_dir / "sg.rss"
+    if not sg_ref.exists():
+        raise FileNotFoundError(
+            f"Missing conductivity reference model for bound files: {sg_ref}"
+        )
+
+    paths = {
+        "Lboundsg": _write_uniform_rss_from_reference(
+            sg_ref, output_dir / "Sg_min.rss", sg_min
+        ),
+        "Uboundsg": _write_uniform_rss_from_reference(
+            sg_ref, output_dir / "Sg_max.rss", sg_max
+        ),
+    }
+
+    if ep_min is not None or ep_max is not None:
+        if ep_min is None or ep_max is None:
+            raise ValueError("Both ep_min and ep_max must be provided together.")
+        ep_ref = output_dir / "ep.rss"
+        if not ep_ref.exists():
+            ep_ref = fdmodel_dir / "ep.rss"
+        if not ep_ref.exists():
+            raise FileNotFoundError(
+                f"Missing permittivity reference model for bound files: {ep_ref}"
+            )
+        paths["Lboundep"] = _write_uniform_rss_from_reference(
+            ep_ref, output_dir / "Ep_min.rss", ep_min
+        )
+        paths["Uboundep"] = _write_uniform_rss_from_reference(
+            ep_ref, output_dir / "Ep_max.rss", ep_max
+        )
+
+    return paths
+
+
 def create_weight_file_from_hx(hx_record_path: Path, weight_path: Path) -> Path:
     hx_record_path = Path(hx_record_path)
     weight_path = Path(weight_path)
@@ -184,6 +252,11 @@ def prepare_inversion_inputs(
     uniform_conductivity: Optional[float] = None,
     uniform_resistivity: Optional[float] = None,
     tik_sgregalpha: Optional[float] = None,
+    sg_min: float = 1e-8,
+    sg_max: float = 1.0,
+    ep_min: Optional[float] = None,
+    ep_max: Optional[float] = None,
+    constrain: bool = True,
 ) -> Dict[str, Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -206,6 +279,16 @@ def prepare_inversion_inputs(
         hx_record_path=data_paths["Recordfile_HX"],
         weight_path=output_dir / "weight.rss",
     )
+    bound_paths: Dict[str, Path] = {}
+    if constrain:
+        bound_paths = create_bound_files(
+            fdmodel_dir=fdmodel_dir,
+            output_dir=output_dir,
+            sg_min=sg_min,
+            sg_max=sg_max,
+            ep_min=ep_min,
+            ep_max=ep_max,
+        )
     mod_cfg_values = read_cfg_values(Path(fdmodel_dir) / "mod.cfg")
     # Pin order/lpml/PML params to the exact forward-run values - a mismatch
     # here (e.g. inv.cfg's own template lpml drifting from mod.cfg's) would
@@ -217,6 +300,22 @@ def prepare_inversion_inputs(
         if value is not None:
             pml_updates[key] = value
     cfg_path = output_dir / "inv.cfg"
+    input_file_values: Dict[str, str] = {
+        "constrain": "true" if constrain else "false",
+        "Sg": "sg0.rss",
+        "Ep": "ep.rss",
+        "Wavelet": "wav2d.rss",
+        "Recordfile_HX": "Hx_data.rss",
+        "Recordfile_HZ": "Hz_data.rss",
+        "Dataweightfile": "weight.rss",
+        **pml_updates,
+    }
+    if constrain:
+        input_file_values["Lboundsg"] = "Sg_min.rss"
+        input_file_values["Uboundsg"] = "Sg_max.rss"
+        if ep_min is not None and ep_max is not None:
+            input_file_values["Lboundep"] = "Ep_min.rss"
+            input_file_values["Uboundep"] = "Ep_max.rss"
     write_inv_cfg(
         template_cfg=template_cfg,
         output_cfg=cfg_path,
@@ -225,17 +324,9 @@ def prepare_inversion_inputs(
         dtx=dtx,
         dtz=dtz,
         tik_sgregalpha=tik_sgregalpha,
-        input_file_values={
-            "Sg": "sg0.rss",
-            "Ep": "ep.rss",
-            "Wavelet": "wav2d.rss",
-            "Recordfile_HX": "Hx_data.rss",
-            "Recordfile_HZ": "Hz_data.rss",
-            "Dataweightfile": "weight.rss",
-            **pml_updates,
-        },
+        input_file_values=input_file_values,
     )
-    return {
+    result: Dict[str, Path] = {
         "inv_cfg": cfg_path,
         "sg0": sg0_path,
         "ep": ep_path,
@@ -244,6 +335,9 @@ def prepare_inversion_inputs(
         "hz": data_paths["Recordfile_HZ"],
         "weight": weight_path,
     }
+    if bound_paths:
+        result.update(bound_paths)
+    return result
 
 
 def stage_run_directory(
@@ -279,6 +373,7 @@ def stage_run_directory(
 
 
 __all__ = [
+    "create_bound_files",
     "create_initial_sg0_model",
     "create_weight_file_from_hx",
     "prepare_data_from_fdmodel",
