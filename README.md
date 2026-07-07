@@ -145,7 +145,13 @@ Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
    - Run 1D layered inversion on FD observations.
    - Review and export pseudo-2D sections.
 
-## 6) Troubleshooting
+## 6) Documentation
+
+- Full GUI guide with parameter descriptions: [`doc/gui_manual.pdf`](doc/gui_manual.pdf) (build from [`doc/gui_manual.tex`](doc/gui_manual.tex) — see [`doc/README.md`](doc/README.md))
+- Example model: [`examples/Fault_1.sgy`](examples/Fault_1.sgy)
+- Module reference: [`scripts/README.md`](scripts/README.md)
+
+## 7) Troubleshooting
 
 - If a step reports missing setup data, run Step 01 first and finalize setup.
 - If modelling cannot start, verify:

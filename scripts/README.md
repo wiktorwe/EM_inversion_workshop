@@ -29,10 +29,10 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   phasor-ratio channel-gain extraction (`compute_gains_for_fd_outputs`).
 - `analytic_1d_forward.py`: 1D layered forward model for the workshop's
   magnetic (Hx) line source, via rockem-suite's validated
-  `magnetic_line_source_fields_layered` - used by `05_1d_empymod_inversion`'s
+  `magnetic_line_source_fields_layered` - used by `05_1d_inversion`'s
   inversion and calibration. Replaces `empymod_1d_forward.py` (below).
 - `inversion.py`: 2D inversion input preparation and `inv.cfg` writing
-  helpers, used by `03_inversion`.
+  helpers, used by `03_2d_inversion`.
 - `empymod_1d_forward.py`: **legacy** - the pre-redesign empymod-based 1D
   point-dipole forward. No longer imported by any of the six workshop
   notebooks; kept only because the vendored `third_party/empy_blockinv`
@@ -44,7 +44,7 @@ This folder is the module-oriented script codebase used by the GUI notebooks
 - `survey.cfg`: survey template copied to a temp workspace.
 - `mod.cfg`: 2D forward-modelling config template (explicit TE2D engine).
 - `mod3d.cfg`: 3D forward-modelling config template (legacy ADI path -
-  unvalidated by the 2D redesign, see `02_visualization`'s markdown).
+  unvalidated by the 2D redesign, see `02_fwmodelling_and_data_visualization`'s markdown).
 - `inv.cfg`: 2D inversion config template (explicit TE2D engine).
 - `runmod.sh` / `runinv.sh`: run scripts invoking `mpiEmmodTE2d`/
   `mpiEminvTE2d` at `$ROCKEM_SUITE_ROOT/bin` (default

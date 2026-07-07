@@ -8,6 +8,7 @@
 \usepackage{hyperref}
 \usepackage{booktabs}
 \usepackage{parskip}
+\usepackage{verbatim}
 \setlength{\emergencystretch}{3em}
 
 \title{EM Inversion Workshop\\GUI Manual}
@@ -17,21 +18,45 @@
 \begin{document}
 \maketitle
 
-This manual describes how to set up a Python environment, install dependencies, and run the six workshop GUIs. For each GUI it explains how to launch it, how to set parameters, and—for non-expert users—what each parameter means physically and what impact it has on the simulation or workflow.
+This manual describes how to set up a Python environment, configure machine-specific paths, install dependencies, and run the seven workshop GUIs. For each GUI it explains how to launch it, how to set parameters, and—for non-expert users—what each parameter means physically and what impact it has on the simulation or workflow.
 
-The six GUIs are:
+The seven GUIs are:
 \begin{itemize}
+  \item \textbf{00\_configure\_workshop} — Set rockem-suite path, MPI launcher, default SEG-Y, and other machine-specific settings.
   \item \textbf{01\_fw\_setup} — Prepare FD modelling inputs from a SEG-Y file.
-  \item \textbf{02\_visualization} — Run FD modelling and visualize channel-gain amplitude/phase from shot records.
-  \item \textbf{03\_inversion} — Generate inversion inputs and run the 2D inversion locally.
-  \item \textbf{04\_results} — View 2D inversion results and compare real data with synthetics.
-  \item \textbf{05\_1d\_empymod\_inversion} — Independent 1D layered inversion, per transmitter, against a validated analytic magnetic (Hx) line-source solver (despite the filename, no empymod is used).
-  \item \textbf{06\_1d\_empymod\_results} — View the 1D inversion's pseudo-2D section, per-Tx diagnostics, and modelled-vs-observed data comparison.
+  \item \textbf{02\_fwmodelling\_and\_data\_visualization} — Run FD modelling and visualize channel-gain amplitude/phase from shot records.
+  \item \textbf{03\_2d\_inversion} — Generate inversion inputs and run the 2D inversion locally.
+  \item \textbf{04\_2d\_inversion\_results} — View 2D inversion results and compare real data with synthetics.
+  \item \textbf{05\_1d\_inversion} — Independent 1D layered inversion, per transmitter, against a validated analytic magnetic (Hx) line-source solver.
+  \item \textbf{06\_1d\_inversion\_results} — View the 1D inversion's pseudo-2D section, per-Tx diagnostics, and modelled-vs-observed data comparison.
 \end{itemize}
 
-GUIs 01--04 form the 2D explicit-FDTD forward/inversion workflow; 05--06 are an independent, complementary 1D analysis that runs directly against the 2D forward run's own data (no separate FDTD run needed) and does not depend on 03/04's inversion having been run.
+Steps 00--04 form the 2D explicit-FDTD forward/inversion workflow; 05--06 are an independent, complementary 1D analysis that runs directly against the 2D forward run's own data (no separate FDTD run needed) and does not depend on 03/04's inversion having been run.
 
 All GUIs are Jupyter notebooks served as code-hidden applications via Voila (ipywidgets and Plotly). Run Voila from the \textbf{workshop root} so that \texttt{scripts} and \texttt{third\_party} are on the Python path.
+
+%=============================================================================
+\section{Workspace layout}
+%=============================================================================
+
+All notebook-generated artifacts are written under \texttt{workspace/} (gitignored). This keeps the repository root clean and separates 2D and 1D workflows:
+
+\begin{verbatim}
+workspace/
+  2D/
+    forward/              # Step 01-02: FD model, mod.cfg, shot gathers
+    inversion/
+      input/              # Step 03: prepared inversion inputs
+      Run{N}/             # Step 03: 2D inversion runs (Run0, Run1, ...)
+    results/Run{N}/       # Step 04: SEG-Y exports
+  1D/
+    inversion/Run{N}/     # Step 05: 1D inversion runs
+    results/Run{N}/       # Step 06: SEG-Y exports
+\end{verbatim}
+
+\textbf{Example model:} \texttt{examples/Fault\_1.sgy} is a sample resistivity model committed with the repository. Load it in Step 01 (or set it as the default in Step 00).
+
+\textbf{Restore pristine state:} run \texttt{./clean.sh} from the workshop root to remove \texttt{workspace/}, Voila PID files, and caches. Use \texttt{./clean.sh --dry-run} to preview, or \texttt{./clean.sh -y} to skip confirmation.
 
 %=============================================================================
 \section{Environment setup}
@@ -43,7 +68,7 @@ Before setting up Python, ensure you have:
 \begin{itemize}
   \item Python 3.10 or newer
   \item \texttt{mpirun} (OpenMPI or compatible MPI runtime)
-  \item A validated \texttt{rockem-suite} checkout, built with \texttt{make mpi}, with the \textbf{explicit} TE2D engine binaries \texttt{mpiEmmodTE2d} and \texttt{mpiEminvTE2d} under its \texttt{bin/} directory. Their location is \texttt{\$ROCKEM\_SUITE\_ROOT/bin}, where \texttt{ROCKEM\_SUITE\_ROOT} is an environment variable defaulting to \texttt{\textasciitilde/software/new\_rockem/rockem-suite} (see \texttt{scripts/modules/rockem\_bridge.py}). The ADI TE2D engine (\texttt{mpiEmmodADITE2d}/\texttt{mpiEminvADITE2d}) is \textbf{not} used by this workshop — it fails rockem-suite's own layered-model Green's-function validation.
+  \item A validated \texttt{rockem-suite} checkout, built with \texttt{make mpi}, with the \textbf{explicit} TE2D engine binaries \texttt{mpiEmmodTE2d} and \texttt{mpiEminvTE2d} under its \texttt{bin/} directory. Their location is \texttt{\$ROCKEM\_SUITE\_ROOT/bin}, where \texttt{ROCKEM\_SUITE\_ROOT} is set by Step 00 (or defaults to \texttt{\textasciitilde/software/new\_rockem/rockem-suite}; see \texttt{scripts/modules/rockem\_bridge.py}). The ADI TE2D engine (\texttt{mpiEmmodADITE2d}/\texttt{mpiEminvADITE2d}) is \textbf{not} used by this workshop — it fails rockem-suite's own layered-model Green's-function validation.
 \end{itemize}
 
 \subsection{Creating a virtual environment (venv)}
@@ -95,8 +120,6 @@ Command:
   \texttt{python -m ipykernel install --user --name=em\_workshop --display-name="Python (em\_workshop)"}
 \end{quote}
 
-For reproducibility you can add a \texttt{requirements.txt} in the project root with these packages and then run \texttt{pip install -r requirements.txt}.
-
 %=============================================================================
 \section{How to run the GUIs}
 %=============================================================================
@@ -104,23 +127,57 @@ For reproducibility you can add a \texttt{requirements.txt} in the project root 
 From the \textbf{workshop root} directory, use the provided shell scripts. Each script changes into the script directory and starts Voila with the corresponding notebook (sources stripped so users see only the interface).
 
 \begin{itemize}
+  \item \texttt{./start\_00\_configure.sh} \quad $\to$ 00\_configure\_workshop
   \item \texttt{./start\_01\_fw\_setup.sh} \quad $\to$ 01\_fw\_setup
-  \item \texttt{./start\_02\_visualization.sh} \quad $\to$ 02\_visualization
-  \item \texttt{./start\_03\_inversion.sh} \quad $\to$ 03\_inversion
-  \item \texttt{./start\_04\_results.sh} \quad $\to$ 04\_results
-  \item \texttt{./start\_05\_1d\_empymod\_inversion.sh} \quad $\to$ 05\_1d\_empymod\_inversion
-  \item \texttt{./start\_06\_1d\_empymod\_results.sh} \quad $\to$ 06\_1d\_empymod\_results
+  \item \texttt{./start\_02\_fwmodelling\_and\_data\_visualization.sh} \quad $\to$ 02\_fwmodelling\_and\_data\_visualization
+  \item \texttt{./start\_03\_2d\_inversion.sh} \quad $\to$ 03\_2d\_inversion
+  \item \texttt{./start\_04\_2d\_inversion\_results.sh} \quad $\to$ 04\_2d\_inversion\_results
+  \item \texttt{./start\_05\_1d\_inversion.sh} \quad $\to$ 05\_1d\_inversion
+  \item \texttt{./start\_06\_1d\_inversion\_results.sh} \quad $\to$ 06\_1d\_inversion\_results
 \end{itemize}
 
-Run 05/06 after 01/02 have produced FD data for at least one transmitter — they read directly from that data and do not require 03/04's 2D inversion to have been run.
+\textbf{Recommended order:} run Step 00 once per machine, then 01 $\to$ 02 $\to$ 03 $\to$ 04 for the 2D workflow. Steps 05--06 can follow after 01/02 have produced FD data for at least one transmitter — they read directly from that data and do not require 03/04's 2D inversion to have been run.
 
 Alternatively, from the workshop root:
 \begin{quote}
-  \texttt{voila 01\_fw\_setup.ipynb --strip\_sources=True}
+  \texttt{voila 00\_configure\_workshop.ipynb --strip\_sources=True}
 \end{quote}
-(and similarly for the other five notebooks.)
+(and similarly for the other notebooks.)
 
-\textbf{Note:} 01\_fw\_setup and 04\_results both use \texttt{.voila\_server.pid}; avoid running both at the same time if you rely on that PID file.
+Each start script writes its own Voila PID file (e.g.\ \texttt{.voila\_fw\_setup\_server.pid}, \texttt{.voila\_2d\_inversion\_server.pid}), so multiple GUIs can be managed independently.
+
+%=============================================================================
+\section{Recommended workflow}
+%=============================================================================
+
+\begin{enumerate}
+  \item \textbf{Step 00 — Configure} — Set \texttt{rockem-suite} root, MPI launcher (\texttt{mpirun}), default process count, default SEG-Y (\texttt{examples/Fault\_1.sgy}), and workspace directory name. Click \textbf{Validate} to check binaries and paths, then \textbf{Save} to write \texttt{workshop\_config.json}.
+  \item \textbf{Step 01 — FW setup} — Load a SEG-Y resistivity model, configure survey and FD design, then \textbf{Generate FD inputs (Finalize setup)}. Outputs go to \texttt{workspace/2D/forward/}.
+  \item \textbf{Step 02 — FW modelling and data visualization} — Run forward modelling, load \texttt{Hxshot.rss}/\texttt{Hzshot.rss}, compute channel-gain amplitude/phase, and inspect results.
+  \item \textbf{Step 03 — 2D inversion} — Generate inversion inputs into \texttt{workspace/2D/inversion/input/}, then run inversion into \texttt{workspace/2D/inversion/RunN/}.
+  \item \textbf{Step 04 — 2D inversion results} — Compare models and data; export SEG-Y to \texttt{workspace/2D/results/RunN/}.
+  \item \textbf{Step 05 — 1D inversion} — Run per-transmitter 1D layered inversion; outputs go to \texttt{workspace/1D/inversion/RunN/}.
+  \item \textbf{Step 06 — 1D inversion results} — View pseudo-2D sections and export to \texttt{workspace/1D/results/RunN/}.
+\end{enumerate}
+
+%=============================================================================
+\section{GUI 0: 00\_configure\_workshop}
+%=============================================================================
+
+\subsection{Purpose}
+
+Configure machine-specific paths before running the other notebooks. Settings are saved to \texttt{workshop\_config.json} at the repo root (gitignored). All other notebooks read this file at startup via \texttt{scripts/modules/workshop\_config.py}.
+
+\subsection{Parameters}
+
+\begin{itemize}
+  \item \textbf{rockem-suite} — Path to the validated rockem-suite checkout (must contain \texttt{python/}, \texttt{bin/mpiEmmodTE2d}, \texttt{bin/mpiEminvTE2d}, and the analytic Green's-function solver under \texttt{doc/examples/validate\_layered\_1d\_model/shared/}).
+  \item \textbf{mpirun} — MPI launcher executable (usually \texttt{mpirun}). Used by Steps 02, 03, and 04 when launching FD or inversion jobs.
+  \item \textbf{nproc} — Default number of MPI processes for FD and inversion runs (can still be changed per GUI).
+  \item \textbf{default SEG-Y} — Default resistivity model path pre-filled in Step 01 and used as fallback for SEG-Y export in Steps 04 and 06. The workshop includes \texttt{examples/Fault\_1.sgy}.
+  \item \textbf{workspace} — Name of the generated-artifacts directory (default \texttt{workspace}).
+  \item \textbf{Buttons} — \textbf{Validate} checks rockem-suite binaries, \texttt{mpirun}, default SEG-Y, and the analytic solver; \textbf{Save} writes \texttt{workshop\_config.json}; \textbf{Reset defaults} restores built-in defaults without saving; \textbf{Quit Voila} stops the server.
+\end{itemize}
 
 %=============================================================================
 \section{GUI 1: 01\_fw\_setup}
@@ -128,227 +185,187 @@ Alternatively, from the workshop root:
 
 \subsection{Purpose}
 
-Generate finite-difference (FD) modelling inputs from a SEG-Y resistivity model: conductivity/permittivity files (\texttt{sg.rss}, \texttt{ep.rss}), source wavelet (\texttt{wav2d.rss}), survey geometry (\texttt{Survey.rss}), and \texttt{mod.cfg} settings. Intermediate files are written to a temporary session folder; final outputs go to \texttt{FDmodel}.
+Generate finite-difference (FD) modelling inputs from a SEG-Y resistivity model: conductivity/permittivity files (\texttt{sg.rss}, \texttt{ep.rss}), source wavelet (\texttt{wav2d.rss}), survey geometry (\texttt{Survey.rss}), and \texttt{mod.cfg} settings. Intermediate files are written to a temporary session folder; final outputs go to \texttt{workspace/2D/forward/}.
 
 \subsection{Parameters (physical meaning and impact)}
 
 \begin{itemize}
 
-  \item \textbf{SEGY file} — Path to the input SEG-Y file containing the resistivity model. This defines the subsurface you are simulating: the grid and resistivity values control where EM waves propagate and how they attenuate. Use a model that matches the geology and scale of your survey.
+  \item \textbf{SEGY file} — Path to the input SEG-Y file containing the resistivity model. Defaults to \texttt{examples/Fault\_1.sgy} if configured in Step 00. This defines the subsurface you are simulating: the grid and resistivity values control where EM waves propagate and how they attenuate.
 
-  \item \textbf{ep constant} — Electrical permittivity (relative dielectric constant) assigned uniformly in the model. It affects wave speed and wavelength. It is usually kept constant when the focus is on conductivity/resistivity. Changing it shifts phase and can affect how well synthetics match real data if the data are sensitive to permittivity.
+  \item \textbf{ep constant} — Electrical permittivity (relative dielectric constant) assigned uniformly in the model. It affects wave speed and wavelength. It is usually kept constant when the focus is on conductivity/resistivity.
 
-  \item \textbf{tx0 (m), tz0 (m), dtx (m), ntx} — Transmitter (source) geometry: first source position in $x$ and $z$, spacing between sources, and number of sources. This is where the EM signal is “injected.” All positions must lie inside the model bounds. More sources give more data but increase run time.
+  \item \textbf{tx0 (m), tz0 (m), dtx (m), ntx} — Transmitter (source) geometry: first source position in $x$ and $z$, spacing between sources, and number of sources. All positions must lie inside the model bounds.
 
-  \item \textbf{rx0 (m), rz0 (m), drx (m), nrx} — Receiver geometry: first receiver $x$ and $z$, receiver spacing, and number of receivers. This is where the field is “measured.” Spacing controls spatial sampling and resolution; typically receivers are offset from the source.
+  \item \textbf{rx0 (m), rz0 (m), drx (m), nrx} — Receiver geometry: first receiver $x$ and $z$, receiver spacing, and number of receivers.
 
-  \item \textbf{flist (Hz)} — Comma-separated list of source frequencies (e.g.\ \texttt{2000,4000,6000}). Lower frequencies penetrate deeper but have lower resolution; higher frequencies resolve shallow structure better. Choose frequencies that match the content you want to invert or compare with data.
+  \item \textbf{flist (Hz)} — Comma-separated list of source frequencies (e.g.\ \texttt{2000,4000,6000}). Lower frequencies penetrate deeper; higher frequencies resolve shallow structure better.
 
-  \item \textbf{dt (s)} — Time step for the wavelet and for the FD solver. It must be small enough for numerical stability (CFL) and to sample the highest frequency. Too large a value causes instability or numerical dispersion; too small increases run time and memory.
+  \item \textbf{dt (s)} — Time step for the wavelet and for the FD solver. It must satisfy numerical stability (CFL) and sample the highest frequency.
 
-  \item \textbf{n\_periods} — Number of periods of the lowest frequency in the wavelet. This controls how long the source radiates and affects the amplitude and phase of the synthetic data.
+  \item \textbf{n\_periods} — Number of periods of the lowest frequency in the wavelet. Controls how long the source radiates.
 
-  \item \textbf{alpha} — Ramp parameter (0--1) for the ramp square-wave wavelet. It shapes the rise and fall of the source and affects which frequencies dominate in the synthetic.
+  \item \textbf{alpha} — Ramp parameter (0--1) for the ramp square-wave wavelet.
 
-  \item \textbf{f\_min (Hz), f\_max (Hz)} — Frequency range used to design the FD grid for the \textbf{explicit} engine (\texttt{mpiEmmodTE2d}). Everything below (grid spacing, time step, \texttt{eps\_r}, PML, depth margin) follows deterministically from these plus \texttt{rho\_min}/\texttt{rho\_max} and the receiver offsets — there is no separate dx/dt/CFL widget to hand-tune, since these are numerical consequences of the physics, not independent choices.
+  \item \textbf{f\_min (Hz), f\_max (Hz)} — Frequency range used to design the FD grid for the \textbf{explicit} engine (\texttt{mpiEmmodTE2d}). Grid spacing, time step, \texttt{eps\_r}, PML, and depth margin follow deterministically from these plus \texttt{rho\_min}/\texttt{rho\_max} and receiver offsets.
 
-  \item \textbf{rho\_min (Ohm-m), rho\_max (Ohm-m)} — Expected resistivity range in the model. Grid spacing is sized from the more restrictive of skin depth (at \texttt{f\_max}/\texttt{rho\_min}) and the minimum receiver offset; the eps\_r used to relax the explicit engine's CFL time-step limit is sized from \texttt{rho\_max}/\texttt{f\_max}. Set them to bracket your actual model to avoid undersampling or unnecessary refinement.
+  \item \textbf{rho\_min (Ohm-m), rho\_max (Ohm-m)} — Expected resistivity range in the model. Grid spacing is sized from skin depth and minimum receiver offset; \texttt{eps\_r} is sized from \texttt{rho\_max}/\texttt{f\_max}.
 
-  \item \textbf{dimension} — 2D or 3D. The FD solver uses a 2D or 3D grid accordingly. 2D is much faster and is appropriate for line surveys. \textbf{Note:} the 3D path still uses the legacy ADI engine and is not covered by this workshop's explicit-engine validation — treat 3D results as unvalidated.
+  \item \textbf{dimension} — 2D or 3D. \textbf{Note:} the 3D path uses the legacy ADI engine and is not covered by this workshop's explicit-engine validation.
 
-  \item \textbf{points/skin} — Number of grid points per skin depth at the worst case (highest conductivity, highest frequency). More points improve accuracy but increase grid size and run time; too few cause numerical dispersion and wrong amplitudes/phases.
+  \item \textbf{points/skin, cells/min offset, tan(delta) floor, eps\_r cap, sigma\_max clip} — FD design controls; see the GUI readout after \textbf{Compute FD design}.
 
-  \item \textbf{cells/min offset} — Number of grid cells across the smallest receiver offset. For near-offset surveys this (not skin depth) often ends up the more restrictive constraint on grid spacing — see \texttt{points/skin} above; the FD design uses whichever of the two implies the finer grid.
+  \item \textbf{Depth margin (auto)} — If the loaded model is too shallow for source/receiver clearance, \textbf{Generate FD inputs} automatically pads it in depth.
 
-  \item \textbf{tan(delta) floor} — Minimum loss-tangent ($\sigma/(\omega\varepsilon)$) the design will tolerate at the least-conductive/highest-frequency corner of the survey when choosing \texttt{eps\_r}. Raising \texttt{eps\_r} relaxes the explicit engine's CFL time-step limit (bigger time steps, faster runs) as long as the medium stays comfortably conduction-dominated; this floor caps how far \texttt{eps\_r} is pushed so that trade-off stays physically negligible.
-
-  \item \textbf{eps\_r cap} — Hard ceiling on the \texttt{eps\_r} the design will choose, regardless of what the tan(delta) floor would otherwise allow. The FD design readout reports whether this cap is binding.
-
-  \item \textbf{sigma\_max clip (S/m, 0=off)} — Optional cap on the conductivity used when sizing the grid/eps\_r, for models with a few extremely conductive outlier cells that would otherwise force an unnecessarily fine grid. Leave at 0 to disable.
-
-  \item \textbf{Depth margin (auto)} — Not a separate widget: the FD design readout also reports the minimum clearance the model needs, in depth, from the source/receiver depths to the top/bottom of the FD domain before the absorbing boundary. If the loaded model falls short, \textbf{Generate FD inputs} automatically pads it (extending the shallowest/deepest layer outward) and reports how much was added — a model that's too shallow there can otherwise give a stable but measurably wrong result with no other warning.
-
-  \item \textbf{Buttons} — “Load model” loads the SEG-Y and updates resistivity bounds; “Plot model” refreshes the resistivity plot; “Build intermediate sg/ep” writes conductivity and permittivity files; “Build intermediate wav2d” and “Plot wavelet + spectrum” create and visualize the wavelet; “Generate survey.cfg + Survey.rss” writes survey geometry; “Compute FD design” computes recommended grid spacing, time step, \texttt{eps\_r}, PML, and depth margin; “Generate FD inputs (Finalize setup)” interpolates to the target grid, pads depth if needed, and writes everything to \texttt{FDmodel}. Use “Quit GUI server” to stop Voila.
+  \item \textbf{Buttons} — \textbf{Load model}, \textbf{Plot model}, \textbf{Build intermediate sg/ep}, \textbf{Build intermediate wav2d}, \textbf{Generate survey.cfg + Survey.rss}, \textbf{Compute FD design}, \textbf{Generate FD inputs (Finalize setup)} writes everything to \texttt{workspace/2D/forward/}. Use \textbf{Quit GUI server} to stop Voila.
 
 \end{itemize}
 
 %=============================================================================
-\section{GUI 2: 02\_visualization}
+\section{GUI 2: 02\_fwmodelling\_and\_data\_visualization}
 %=============================================================================
 
 \subsection{Purpose}
 
-Run FD modelling (via \texttt{FDmodel/runmod.sh} and the explicit-engine MPI binary), load \texttt{Hxshot.rss} and \texttt{Hzshot.rss} outputs, compute steady-state channel-gain amplitude and phase, and visualize or save the results.
+Run FD modelling (via \texttt{workspace/2D/forward/runmod.sh} and the explicit-engine MPI binary), load \texttt{Hxshot.rss} and \texttt{Hzshot.rss} outputs from \texttt{workspace/2D/forward/Data/}, compute steady-state channel-gain amplitude and phase, and visualize or save the results.
 
 \subsection{External requirement}
 
-The explicit-engine MPI FD binary (\texttt{\$ROCKEM\_SUITE\_ROOT/bin/mpiEmmodTE2d}) must be installed and \texttt{FDmodel/runmod.sh} must resolve \texttt{ROCKEM\_SUITE\_ROOT} correctly (default \texttt{\textasciitilde/software/new\_rockem/rockem-suite}). The GUI and run script reference this binary.
+The explicit-engine MPI FD binary (\texttt{\$ROCKEM\_SUITE\_ROOT/bin/mpiEmmodTE2d}) must be installed. Step 00 (or \texttt{ROCKEM\_SUITE\_ROOT}) must point at a valid checkout; \texttt{runmod.sh} in the forward workspace uses the same setting.
 
 \subsection{Parameters (physical meaning and impact)}
 
 \begin{itemize}
 
-  \item \textbf{nproc} — Number of MPI processes used to run the FD modelling. More processes typically shorten wall-clock time if you have enough cores; it does not change the physics of the result.
+  \item \textbf{nproc} — Number of MPI processes for the FD run (default from Step 00 config).
 
-  \item \textbf{f\_min (Hz)} — The lowest frequency in the recorded wavelet, used as the reference for the steady-state phasor extraction window (see \texttt{n\_periods} below) — every frequency's window is scaled from this one so a single shared Hann window covers the whole multi-tone recording without tones leaking into each other's estimate.
+  \item \textbf{f\_min (Hz), n\_periods (of f\_min)} — Reference frequency and extraction window for steady-state phasor extraction (same convention as Step 05).
 
-  \item \textbf{n\_periods (of f\_min)} — Number of periods of \texttt{f\_min} used as the extraction window (applied to every frequency, scaled by its ratio to \texttt{f\_min}). The window must be well within the steady-state part of the recording, past the source's startup ramp; too short a window leaves transient energy in the estimate.
+  \item \textbf{component} — Hx or Hz magnetic field component.
 
-  \item \textbf{component} — Hx or Hz: which magnetic field component is plotted (in-line or vertical). Different components have different sensitivity to structure and are used for different interpretation or inversion choices.
+  \item \textbf{plot} (metric) — Amplitude or phase vs receiver, transmitter, or frequency.
 
-  \item \textbf{plot} (metric) — Which quantity is plotted: amplitude or phase vs receiver, vs transmitter, or vs frequency. Amplitude reflects attenuation and geometric spreading; phase reflects travel path and velocity. Choose the view that matches your interpretation or data comparison.
+  \item \textbf{frequency, tx, local rx} — Selectors for display.
 
-  \item \textbf{frequency, tx, local rx} — Selectors for which frequency, source, or receiver index to display. Use them to inspect specific source--receiver pairs or frequencies relevant to your interpretation.
-
-  \item \textbf{Buttons} — “Run modelling (background)” starts the FD run; “Stop run” stops it; “Refresh run status” updates job progress; “Load FD outputs” loads \texttt{Hxshot.rss}/\texttt{Hzshot.rss}; “Compute channel-gain amplitude/phase” runs the steady-state phasor-ratio extraction (trace phasor over injected-wavelet phasor, so any convention-dependent scale cancels — no time-derivative or phase-correction constants); “Save processed results” writes the NPZ; “Quit GUI server” stops Voila.
+  \item \textbf{Buttons} — \textbf{Run modelling (background)}, \textbf{Stop run}, \textbf{Refresh run status}, \textbf{Load FD outputs}, \textbf{Compute channel-gain amplitude/phase}, \textbf{Save processed results} (writes NPZ under \texttt{Data/processed/}), \textbf{Quit GUI server}.
 
 \end{itemize}
 
 %=============================================================================
-\section{GUI 3: 03\_inversion}
+\section{GUI 3: 03\_2d\_inversion}
 %=============================================================================
 
 \subsection{Purpose}
 
-Generate inversion inputs from \texttt{FDmodel} and the inversion template, run the inversion locally (staged into the next \texttt{InversionRunN} directory), and monitor logs and model progress.
+Generate inversion inputs from \texttt{workspace/2D/forward/} and the inversion template, run the inversion locally (staged into the next \texttt{workspace/2D/inversion/RunN/} directory), and monitor logs and model progress.
 
 \subsection{External requirement}
 
-The explicit-engine MPI inversion binary (\texttt{\$ROCKEM\_SUITE\_ROOT/bin/mpiEminvTE2d}) must be installed and \texttt{scripts/templates/runinv.sh} must resolve \texttt{ROCKEM\_SUITE\_ROOT} correctly (default \texttt{\textasciitilde/software/new\_rockem/rockem-suite}). The GUI and run script reference this binary.
+The explicit-engine MPI inversion binary (\texttt{\$ROCKEM\_SUITE\_ROOT/bin/mpiEminvTE2d}) must be installed.
 
 \subsection{Parameters (physical meaning and impact)}
 
 \begin{itemize}
 
-  \item \textbf{Initial model} — Whether the starting model is defined by uniform conductivity (sigma) or uniform resistivity (rho). The physics is the same (sigma = 1/rho); the choice is for convenience. A good starting value is often a background estimate from your data or prior knowledge.
+  \item \textbf{Initial model} — Uniform conductivity (sigma) or resistivity (rho) starting model.
 
-  \item \textbf{sigma (S/m), rho (Ohm.m)} — Value of the uniform initial model. If it is too far from the true structure, the inversion may need more iterations or get stuck; if it is reasonably close, convergence is faster and more stable.
+  \item \textbf{sigma (S/m), rho (Ohm.m)} — Value of the uniform initial model.
 
-  \item \textbf{Max iter} — Maximum number of inversion iterations. More iterations allow a better fit but increase run time; too few may leave the model under-fit.
+  \item \textbf{Max iter} — Maximum inversion iterations.
 
-  \item \textbf{apertx (m), dtx, dtz} — Grid and extent parameters passed to the inversion. \texttt{apertx} defaults to the forward run's own value (from 01\_fw\_setup's FD design) when available, so the inversion's local model isn't accidentally narrower than what the forward run used. All three should stay consistent with the FD model used to generate synthetics so that the forward and inverse use the same discretization.
+  \item \textbf{apertx (m), dtx, dtz} — Grid and extent parameters. \texttt{apertx} defaults to the forward run's value from Step 01 when available.
 
-  \item \textbf{Tikhonov (sg)} — Regularization weight (\texttt{tik\_sgregalpha}) applied by the inversion engine to discourage overly rough conductivity updates between iterations. Zero disables it; larger values favor smoother models at the cost of fitting the data less exactly.
+  \item \textbf{Tikhonov (sg)} — Regularization weight (\texttt{tik\_sgregalpha}).
 
-  \item \textbf{Clean selected InversionRunN before run} — If checked, the chosen run directory is cleared before staging new inputs. Use this to avoid mixing old files when re-running; uncheck to preserve or append to an existing run.
+  \item \textbf{Clean selected RunN before run} — Clear the chosen run directory before staging new inputs.
 
-  \item \textbf{Load run} — Select which \texttt{InversionRunN} to monitor or use as context. Lets you switch between runs to compare progress or results.
+  \item \textbf{Load run} — Select which \texttt{RunN} under \texttt{workspace/2D/inversion/} to monitor.
 
-  \item \textbf{nproc} — Number of MPI processes for the inversion run. More processes reduce wall-clock time when you have enough cores.
+  \item \textbf{nproc} — MPI processes for inversion (default from Step 00).
 
-  \item \textbf{Buttons} — “Generate inversion inputs” writes inputs to \texttt{InversionInput/}; “Run inversion locally” stages and starts the inversion; “Refresh from progress.log” updates the plot and logs; “Stop run” stops the process; “Quit GUI server” stops Voila.
+  \item \textbf{Buttons} — \textbf{Generate inversion inputs} writes to \texttt{workspace/2D/inversion/input/}; \textbf{Run inversion locally} stages into \texttt{workspace/2D/inversion/RunN/}; \textbf{Refresh from progress.log}; \textbf{Stop run}; \textbf{Quit GUI server}.
 
 \end{itemize}
 
 %=============================================================================
-\section{GUI 4: 04\_results}
+\section{GUI 4: 04\_2d\_inversion\_results}
 %=============================================================================
 
 \subsection{Purpose}
 
-View inversion results: select a run and model (e.g.\ \texttt{sg0}, \texttt{sg\_ls} at an iteration), view 2D resistivity with true-model comparison, resistivity vs depth or vs $x$ slices, compare real data with synthetics (either loaded from the run or generated by running FD for the selected model), and export selected resistivity models to SEG-Y.
+View 2D inversion results: select a run (\texttt{RunN}) and model (\texttt{sg0}, \texttt{sg\_ls} at an iteration, etc.), view 2D resistivity with true-model comparison, resistivity slices, compare real data with synthetics, and export selected models to SEG-Y.
 
 \subsection{Parameters (physical meaning and impact)}
 
 \begin{itemize}
 
-  \item \textbf{Run, Model} — Which inversion run and which model file (e.g.\ initial \texttt{sg0}, or linesearch \texttt{sg\_ls} at an iteration). Use these to inspect how the model evolved and to compare with the true model.
+  \item \textbf{Run, Model} — Which inversion run under \texttt{workspace/2D/inversion/} and which model file.
 
-  \item \textbf{Export selected model to SEGY} — Writes the currently selected model to \texttt{InversionRunN/SEGY\_output/} using the SEG-Y from setup as a template (same header layout, trace/sample organization, origin, and sampling). If the model grid differs from the template grid, the GUI interpolates to the template grid before writing so exported SEG-Y matches the setup SEG-Y geometry exactly.
+  \item \textbf{Export selected model to SEGY} — Writes to \texttt{workspace/2D/results/RunN/} using the setup SEG-Y as a template. Interpolates to template geometry if needed.
 
-  \item \textbf{Export naming and overwrite behavior} — Exported files are deterministic and overwrite on repeated export of the same model: \texttt{sg\_up.rss-11 $\rightarrow$ sg\_up\_iter011.segy}, \texttt{sg0.rss $\rightarrow$ sg0\_iter000.segy}. For \texttt{sg\_ls.rss}, the GUI uses the latest iteration seen in \texttt{progress.log} when available (\texttt{sg\_ls\_iterNNN.segy}), otherwise \texttt{sg\_ls\_iterunknown.segy}.
+  \item \textbf{Export naming} — e.g.\ \texttt{sg\_up\_iter011.segy}, \texttt{sg0\_iter000.segy}, \texttt{sg\_ls\_iterNNN.segy}.
 
-  \item \textbf{Export status (near button)} — A dedicated status banner is shown directly below the run/model/export controls. It reports in-progress, success, or failure, including output filename and folder, so users do not need to scroll to verify export results.
+  \item \textbf{x (m), z (m), Freqs (Hz)} — Slice positions and frequencies for comparison.
 
-  \item \textbf{x (m), z (m)} — Positions for vertical and horizontal resistivity slices. Use them to see resistivity vs depth at a given $x$, or vs horizontal position at a given depth, for interpretation.
+  \item \textbf{Load real data / Load synthetics from run / Generate synthetics from model} — Data comparison options. \textbf{Generate synthetics} runs FD for the selected model using \texttt{nproc} MPI processes.
 
-  \item \textbf{Freqs (Hz)} — Frequencies used when loading real data or generating/running synthetics. They must match the frequencies in your survey and inversion for a meaningful comparison.
+  \item \textbf{component, plot, frequency, tx, local rx, trace idx} — Display selectors (same as Step 02).
 
-  \item \textbf{Load real data / Load synthetics from run / Generate synthetics from model} — Real data are your observations; “Load synthetics from run” loads synthetics saved during inversion; “Generate synthetics from model” runs the FD solver for the selected model so you can test that model without re-running the full inversion. Use these to compare observed vs predicted and assess fit.
-
-  \item \textbf{nproc} — Number of MPI processes when “Generate synthetics from model” is used; it only affects the run time of that FD job.
-
-  \item \textbf{component, plot, frequency, tx, local rx, trace idx} — Same interpretation as in 02\_visualization: choose the component and plot type that match your comparison or interpretation needs.
-
-  \item \textbf{Quit GUI server} — Stops the Voila server.
+  \item \textbf{Quit GUI server} — Stops Voila.
 
 \end{itemize}
 
 %=============================================================================
-\section{GUI 5: 05\_1d\_empymod\_inversion}
+\section{GUI 5: 05\_1d\_inversion}
 %=============================================================================
 
 \subsection{Purpose}
 
-An independent 1D layered inversion, run separately for each transmitter, against rockem-suite's validated analytic magnetic (Hx) line-source Green's function — despite the filename, no empymod is used; it was replaced during this workshop's redesign because reconciling 2D FDTD data against empymod's 3D point-dipole solution required a stack of ad-hoc correction constants that the analytic line-source solver makes unnecessary. This GUI reads channel-gain data directly from the 2D forward run's own \texttt{FDmodel/Data} outputs (via the same steady-state phasor extraction as 02\_visualization) — it does not need 03/04's 2D inversion to have been run first. Each transmitter is calibrated against the analytic solver evaluated on the exact blocky 1D model beneath it (read from that run's own \texttt{sg.rss}), then inverted independently; results are combined into a pseudo-2D section.
+An independent 1D layered inversion, run separately for each transmitter, against rockem-suite's validated analytic magnetic (Hx) line-source Green's function. Reads channel-gain data from \texttt{workspace/2D/forward/Data/} (same phasor extraction as Step 02) — it does not need Steps 03/04 to have been run. Each transmitter is calibrated against the analytic solver on the blocky 1D model beneath it, then inverted independently; results are combined into a pseudo-2D section under \texttt{workspace/1D/inversion/RunN/}.
 
 \subsection{Parameters (physical meaning and impact)}
 
 \begin{itemize}
 
-  \item \textbf{Freqs (Hz)} — Frequencies to extract channel-gain features at. Must match frequencies actually present in the forward run's wavelet.
+  \item \textbf{Freqs (Hz), n\_periods (of f\_min)} — Channel-gain extraction settings (same convention as Step 02).
 
-  \item \textbf{n\_periods (of f\_min)} — Steady-state extraction window length, same convention as 02\_visualization.
+  \item \textbf{n\_layers, z\_start, z\_end, rho\_bg, rho\_min, rho\_max, thk\_min, thk\_max} — 1D model parameterization and search bounds.
 
-  \item \textbf{n\_layers} — Number of layers in the 1D model parameterization (the last is always a half-space). More layers can fit finer depth structure but add search dimensions and increase the risk of trading off resistivity against thickness in a way the data can't actually resolve.
+  \item \textbf{optimizer} — Differential Evolution, Dual Annealing, or BlockInv (Gauss--Newton).
 
-  \item \textbf{z\_start, z\_end} — Depth window (relative to the transmitter depth) that the layered model spans. Should bracket the depth range you expect meaningful structure in; layers are free to redistribute within this span.
+  \item \textbf{calibration} — Fixed calibration constant (recommended) or per-frequency source factor.
 
-  \item \textbf{rho\_bg} — Background resistivity used to build default depth-window bounds; not itself a search parameter.
+  \item \textbf{maxiter, popsize, maxfun, seed, N runs/Tx, n\_jobs, blk\_iter} — Optimizer and ensemble settings.
 
-  \item \textbf{rho\_min, rho\_max, thk\_min, thk\_max} — Search bounds (uniform in log10) for each layer's resistivity and thickness. Set these to bracket physically plausible values for your survey — the optimizer searches only within this box.
+  \item \textbf{w\_hxh, w\_hxhz, Tikhonov lambda} — Misfit weights and smoothness penalty.
 
-  \item \textbf{optimizer} — \emph{Differential Evolution} and \emph{Dual Annealing} (both from SciPy) are global stochastic optimizers; \emph{BlockInv} is a deterministic, pyGIMLi-style Gauss--Newton block inversion. The stochastic optimizers explore the bounded search space more broadly (useful with little prior information) at higher computational cost; BlockInv converges faster from a reasonable starting point but can get stuck in a local minimum.
+  \item \textbf{dx\_out, dz\_out, zmax (0=auto)} — Pseudo-2D output grid.
 
-  \item \textbf{calibration} — \emph{Fixed calibration constant} (default, recommended) measures one complex constant per frequency once, from the known true model beneath each transmitter, and reuses it for every candidate model tried during that transmitter's search — appropriate because this constant reflects the FD engine's own source-injection/grid-discretization convention, not the specific resistivity structure (confirmed by direct testing across several different FD designs and resistivity regimes). \emph{Per-frequency source factor} instead re-solves the same closed-form fit fresh for every candidate model — a fallback for when the fixed constant is found to be unstable (e.g.\ too few receivers per transmitter to pin it down reliably), at the cost of letting the optimizer partially reabsorb genuine model-scale misfit into the calibration itself.
-
-  \item \textbf{maxiter, popsize, maxfun} — Differential Evolution's iteration count, population size, and function-evaluation cap. Larger values search more thoroughly at proportionally higher cost. (\texttt{maxfun} instead bounds Dual Annealing's evaluation count.)
-
-  \item \textbf{seed} — Base random seed. With \textbf{N runs/Tx} $>1$, each repeat uses \texttt{seed + run\_index}, giving an ensemble of independent optimizer restarts per transmitter used to estimate uncertainty (mean/std across the ensemble), not just a single point estimate.
-
-  \item \textbf{N runs/Tx} — Number of independent restarts per transmitter (see \textbf{seed} above). More runs give a better-sampled uncertainty estimate at proportionally higher cost.
-
-  \item \textbf{n\_jobs (-1=all cores)} — Every (transmitter, run) combination is fully independent, so the whole ensemble is parallelized across CPU cores via \texttt{joblib}. \texttt{-1} uses all available cores; set a smaller positive number to leave cores free for other work. This does not change results, only wall-clock time.
-
-  \item \textbf{blk\_iter} — Maximum Gauss--Newton iterations for the BlockInv optimizer (ignored by the other two).
-
-  \item \textbf{w\_hxh, w\_hxhz} — Relative weights of the Hx and Hz channel-gain misfit terms. Increase \texttt{w\_hxhz} relative to \texttt{w\_hxh} (default 2:1) to trust Hz more; note Hz can be genuinely small/uninformative near a source-depth or zero-offset null (see 06's per-Tx diagnostics), where it is automatically down-weighted through its own noise estimate regardless of this setting.
-
-  \item \textbf{Tikhonov lambda} — Smoothness penalty on \emph{adjacent-layer} log10-resistivity differences (not a penalty toward any background/reference value) — discourages the optimizer from inventing sharp, unsupported layer-to-layer contrasts to chase noise below the solver's own validated accuracy floor. Zero disables it.
-
-  \item \textbf{dx\_out, dz\_out, zmax (0=auto)} — Output grid spacing (horizontal/vertical) and maximum depth for the pseudo-2D section built from all transmitters' 1D results; \texttt{zmax=0} auto-selects a depth based on the inverted models.
-
-  \item \textbf{Buttons} — “Reload features” (re-)extracts channel-gain data from the FD run; “Check kx convergence (prior spot-check)” spot-checks the analytic solver's internal quadrature resolution across your prior bounds before committing to a full run; “Run all Tx inversions (calibrates per-Tx)” runs the full ensemble described above; “Build pseudo-2D section” combines per-Tx results; “Export results” writes results out; “Refresh QC plots” (QC Tx / QC freq selectors) shows per-transmitter, per-frequency diagnostic plots; “Quit GUI server” stops Voila.
+  \item \textbf{Buttons} — \textbf{Reload features}, \textbf{Check kx convergence}, \textbf{Run all Tx inversions}, \textbf{Build pseudo-2D section}, \textbf{Export results} (NPZ/JSON under current \texttt{RunN}), \textbf{Refresh QC plots}, \textbf{Quit GUI server}.
 
 \end{itemize}
 
 %=============================================================================
-\section{GUI 6: 06\_1d\_empymod\_results}
+\section{GUI 6: 06\_1d\_inversion\_results}
 %=============================================================================
 
 \subsection{Purpose}
 
-Visualize and export the 1D analytic-solver ensemble inversion results from 05: the pseudo-2D section (mean and uncertainty), per-transmitter model diagnostics with error bars, and modelled-vs-observed data comparison — either against synthetics generated from the inverted model or against real data.
+Visualize and export 1D inversion results from Step 05: pseudo-2D section (mean and uncertainty), per-transmitter diagnostics, and modelled-vs-observed data comparison.
 
 \subsection{Parameters (physical meaning and impact)}
 
 \begin{itemize}
 
-  \item \textbf{Run} — Which \texttt{OneDInversionRunN} (under \texttt{Results/Analytic1D/}) to load.
+  \item \textbf{Run} — Which \texttt{RunN} under \texttt{workspace/1D/inversion/} to load.
 
-  \item \textbf{x slice (m), z slice (m)} — Positions for vertical and horizontal resistivity slices through the pseudo-2D section.
+  \item \textbf{x slice (m), z slice (m), bg rho (Ohm.m)} — Section display controls.
 
-  \item \textbf{bg rho (Ohm.m)} — Background resistivity used only when rebuilding the section display from saved per-layer results.
+  \item \textbf{Tx, Uncertainty} — Per-transmitter diagnostics and uncertainty band (1 std or 90\% CI).
 
-  \item \textbf{Tx} — Which transmitter's per-Tx diagnostics (resistivity-vs-depth with uncertainty, misfit) to display.
+  \item \textbf{Freqs (Hz), component, plot, frequency, local rx, trace idx} — Data-comparison panel (same as Step 04).
 
-  \item \textbf{Uncertainty} — \emph{1 std} or \emph{90\% CI}: which uncertainty band to draw around the ensemble mean in the per-Tx and section plots.
-
-  \item \textbf{Freqs (Hz)} — Frequencies used when loading real data or generating synthetics from the inverted model, for the data-comparison panel.
-
-  \item \textbf{component, plot (metric), frequency, local rx, trace idx} — Same interpretation as in 02\_visualization/04\_results: choose the component and view that match your comparison.
-
-  \item \textbf{Buttons} — “Load run”/“Refresh run list” select and (re)load a \texttt{OneDInversionRunN}; “Rebuild section from saved layers” recomputes the pseudo-2D section display; “Refresh Tx plots” updates the per-Tx diagnostic panel; “Load real data” loads observed channel-gain data for comparison; “Generate synthetics from inverted model” runs the analytic solver on the recovered model for that comparison; “Export mean section to SEGY” writes the ensemble-mean resistivity section using the setup SEG-Y as a template; “Quit GUI server” stops Voila.
+  \item \textbf{Buttons} — \textbf{Load run}, \textbf{Refresh run list}, \textbf{Rebuild section from saved layers}, \textbf{Refresh Tx plots}, \textbf{Load real data}, \textbf{Generate synthetics from inverted model}, \textbf{Export mean section to SEGY} (writes to \texttt{workspace/1D/results/RunN/}), \textbf{Quit GUI server}.
 
 \end{itemize}
 
@@ -357,14 +374,15 @@ Visualize and export the 1D analytic-solver ensemble inversion results from 05: 
 %=============================================================================
 
 \begin{itemize}
-  \item \textbf{Missing \texttt{segyio}} — If 01\_fw\_setup fails to import workshop modules, ensure \texttt{segyio} is installed and that Voila is started from the workshop root so \texttt{scripts} and \texttt{third\_party} are on the path.
-  \item \textbf{No Jupyter kernel for language `python' found} — Install \texttt{ipykernel} and register the kernel (see Install dependencies above). Conda users must run \texttt{python -m ipykernel install --user --name=em\_workshop} after installing packages.
-  \item \textbf{SEGY export cannot find template} — 04\_results export expects a setup SEG-Y template from \texttt{FDmodel/setup\_metadata.json} (\texttt{segy\_template\_path}), with fallback to \texttt{input.segy} in the project root. Run 01\_fw\_setup and finalize setup first, or place a valid \texttt{input.segy} in the root.
-  \item \textbf{Missing explicit-engine MPI FD binary} — 02\_visualization and 04\_results (when generating synthetics) need \texttt{\$ROCKEM\_SUITE\_ROOT/bin/mpiEmmodTE2d}. Check that \texttt{ROCKEM\_SUITE\_ROOT} (default \texttt{\textasciitilde/software/new\_rockem/rockem-suite}) points at a checkout built with \texttt{make mpi}, and that \texttt{FDmodel/runmod.sh} resolves it correctly.
-  \item \textbf{Missing explicit-engine MPI inversion binary} — 03\_inversion needs \texttt{mpiEminvTE2d} under \texttt{\$ROCKEM\_SUITE\_ROOT/bin}. Check \texttt{scripts/templates/runinv.sh} the same way.
-  \item \textbf{Wrong/stale rockem-suite checkout} — if results don't match this manual's validated accuracy claims, confirm \texttt{ROCKEM\_SUITE\_ROOT} isn't pointing at an old checkout that predates this workshop's redesign (e.g.\ one missing \texttt{magnetic\_line\_source\_fields\_layered} in \texttt{doc/examples/validate\_layered\_1d\_model/shared/greens\_layered\_2d.py} — \texttt{scripts/modules/rockem\_bridge.py} raises a clear error in that case).
-  \item \textbf{Missing \texttt{joblib}} — 05's ensemble inversion needs \texttt{joblib} to parallelize the Tx $\times$ seed batch (see Install dependencies above); without it the import fails at the top of the notebook.
-  \item \textbf{PID file} — 01\_fw\_setup and 04\_results both use \texttt{.voila\_server.pid}; do not run both at once if you rely on that file.
+  \item \textbf{Missing configuration} — Run Step 00 and click \textbf{Save} so \texttt{workshop\_config.json} exists. Without it, defaults apply (\texttt{\textasciitilde/software/new\_rockem/rockem-suite}, \texttt{examples/Fault\_1.sgy}).
+  \item \textbf{Missing \texttt{segyio}} — Install \texttt{segyio} and start Voila from the workshop root.
+  \item \textbf{No Jupyter kernel for language `python' found} — Install \texttt{ipykernel} and register the \texttt{em\_workshop} kernel (see Environment setup).
+  \item \textbf{SEGY export cannot find template} — Export expects \texttt{segy\_template\_path} in \texttt{workspace/2D/forward/setup\_metadata.json}, with fallback to the default SEG-Y from Step 00. Run Step 01 and finalize setup first.
+  \item \textbf{Missing explicit-engine MPI FD binary} — Steps 02 and 04 need \texttt{mpiEmmodTE2d}. Validate in Step 00; build with \texttt{make mpi} if missing.
+  \item \textbf{Missing explicit-engine MPI inversion binary} — Step 03 needs \texttt{mpiEminvTE2d}.
+  \item \textbf{Wrong/stale rockem-suite checkout} — Step 00 validation checks for \texttt{magnetic\_line\_source\_fields\_layered} in the analytic solver shared directory.
+  \item \textbf{Missing \texttt{joblib}} — Step 05 needs \texttt{joblib} for parallel ensemble runs.
+  \item \textbf{Stale artifacts} — Run \texttt{./clean.sh} to remove \texttt{workspace/} and start fresh.
 \end{itemize}
 
 %=============================================================================
@@ -372,14 +390,18 @@ Visualize and export the 1D analytic-solver ensemble inversion results from 05: 
 %=============================================================================
 
 \begin{itemize}
-  \item \texttt{FDmodel/} — FD inputs and outputs (e.g.\ \texttt{mod.cfg}, \texttt{sg.rss}, \texttt{Survey.rss}, \texttt{Data/}).
-  \item \texttt{InversionInput/} — 2D inversion input files (e.g.\ \texttt{inv.cfg}, \texttt{sg0.rss}).
-  \item \texttt{InversionRun0/}, \texttt{InversionRun1/}, \ldots — Staged 2D inversion run directories (03/04).
-  \item \texttt{InversionRunN/SEGY\_output/} — SEG-Y exports generated from 04\_results for selected models.
-  \item \texttt{Results/Analytic1D/OneDInversionRun0/}, \ldots — 1D inversion run directories (05/06), independent of \texttt{InversionRunN/}.
-  \item \texttt{scripts/modules/} — Python helpers imported by all six notebooks (SEG-Y I/O, FD design, the rockem-suite bridge, the 1D analytic forward/calibration, 2D inversion helpers); see \texttt{scripts/README.md} for the full module map.
-  \item \texttt{scripts/templates/} — Templates for \texttt{inv.cfg}, \texttt{mod.cfg}, \texttt{mod3d.cfg}, \texttt{survey.cfg}, \texttt{runmod.sh}, \texttt{runinv.sh}, \texttt{clean.sh}.
-  \item \texttt{third\_party/} — Vendored Rockseis Python code and the BlockInv (pyGIMLi-style) 1D inversion helpers used by the workshop.
+  \item \texttt{workshop\_config.json} — Machine-specific settings (Step 00; gitignored).
+  \item \texttt{workspace/2D/forward/} — FD inputs and outputs (\texttt{mod.cfg}, \texttt{sg.rss}, \texttt{Survey.rss}, \texttt{Data/}).
+  \item \texttt{workspace/2D/inversion/input/} — 2D inversion input files (\texttt{inv.cfg}, \texttt{sg0.rss}, etc.).
+  \item \texttt{workspace/2D/inversion/Run0/}, \texttt{Run1/}, \ldots — 2D inversion run directories (Steps 03/04).
+  \item \texttt{workspace/2D/results/RunN/} — SEG-Y exports from Step 04.
+  \item \texttt{workspace/1D/inversion/Run0/}, \ldots — 1D inversion run directories (Steps 05/06).
+  \item \texttt{workspace/1D/results/RunN/} — SEG-Y exports from Step 06.
+  \item \texttt{examples/Fault\_1.sgy} — Sample resistivity model (committed).
+  \item \texttt{scripts/modules/} — Python helpers (\texttt{workshop\_config.py}, \texttt{rockem\_bridge.py}, SEG-Y I/O, FD design, 1D analytic forward, 2D inversion helpers); see \texttt{scripts/README.md}.
+  \item \texttt{scripts/templates/} — Templates for \texttt{inv.cfg}, \texttt{mod.cfg}, \texttt{runmod.sh}, \texttt{runinv.sh}, etc.
+  \item \texttt{scripts/clean\_workspace.py}, \texttt{clean.sh} — Remove all generated artifacts.
+  \item \texttt{third\_party/} — Vendored Rockseis Python code and BlockInv 1D inversion helpers.
 \end{itemize}
 
 \end{document}
