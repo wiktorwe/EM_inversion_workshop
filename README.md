@@ -82,7 +82,7 @@ Launch each step from the project root:
 ./start_06_1d_inversion_results.sh
 ```
 
-**Step 00** writes `workshop_config.json` (rockem-suite path, `mpirun`, default SEG-Y, etc.). Run it once on each machine before the other steps.
+**Step 00** writes `workshop_config.json` (rockem-suite path, `mpirun`, default SEG-Y, optional GPU flags for 2D forward/inversion, etc.). Run it once on each machine before the other steps.
 
 Each command starts a Voila app for that stage. Steps 05/06 are an independent 1D layered inversion against rockem-suite's analytic magnetic line-source solver — run them after 01/02 have produced FD data for at least one Tx gather.
 
@@ -121,6 +121,7 @@ Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
 
 0. **Step 00 — Configure**
    - Set rockem-suite path, MPI launcher, and default SEG-Y.
+   - Optionally enable **GPU** 2D forward (`mpiEmmodTE2dGpu`) and/or inversion (`mpiEminvTE2dGpu`); click **Validate** to check binaries and `nvidia-smi`.
    - Click **Save** (writes `workshop_config.json`).
 
 1. **Step 01 — FW setup**
@@ -156,9 +157,9 @@ Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
 - If a step reports missing setup data, run Step 01 first and finalize setup.
 - If modelling cannot start, verify:
   - `mpirun` is available in your shell
-  - `$ROCKEM_SUITE_ROOT/bin/mpiEmmodTE2d` exists (configure in Step 00 or set the env var) - build with `make mpi` if missing
+  - `$ROCKEM_SUITE_ROOT/bin/mpiEmmodTE2d` exists (or `mpiEmmodTE2dGpu` if GPU forward is enabled in Step 00) — build CPU with `make mpi`, GPU with `make -f Makefile.gpu bin/mpiEmmodTE2dGpu`
 - If inversion cannot start, verify:
   - `mpirun` is available in your shell
-  - `$ROCKEM_SUITE_ROOT/bin/mpiEminvTE2d` exists
+  - `$ROCKEM_SUITE_ROOT/bin/mpiEminvTE2d` exists (or `mpiEminvTE2dGpu` if GPU inversion is enabled)
 - If a GUI does not open, ensure `voila` is installed in the active environment.
 - If you see "No Jupyter kernel for language 'python' found", install `ipykernel` and register the kernel (see Install dependencies above).

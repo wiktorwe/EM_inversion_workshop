@@ -6,8 +6,9 @@ This folder is the module-oriented script codebase used by the GUI notebooks
 ## `scripts/modules/`
 
 - `workshop_config.py`: loads/saves `workshop_config.json` at the repo root
-  (rockem-suite path, MPI launcher, default SEG-Y, workspace dir). Import via
-  `load_config()` before `rockem_bridge`.
+  (rockem-suite path, MPI launcher, default SEG-Y, workspace dir, optional GPU
+  flags for 2D TE2D forward/inversion). Import via `load_config()` before
+  `rockem_bridge`. `validate_config()` checks CPU/GPU binaries and `nvidia-smi`.
 - `rockem_bridge.py`: locates the validated `rockem-suite` checkout (default
   `~/software/new_rockem/rockem-suite`, override via `ROCKEM_SUITE_ROOT`), puts
   its `python/` package and the layered Green's-function solver's `shared/`
