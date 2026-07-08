@@ -186,6 +186,38 @@ def compute_gains_for_fd_outputs(hx_path, hz_path, wavelet_path, freqs, f_min_hz
     }
 
 
+_PHASE_COMPARE_METRICS = frozenset(
+    ("phase_vs_rx_deg", "phase_vs_tx_deg", "phase_vs_freq_deg")
+)
+
+
+def apply_compare_plot_yaxes(fig, metric, y_vals):
+    """Set y-axis limits for real-vs-synthetic data-compare plots.
+
+    Phase metrics stay on [-180, 180] deg. Amplitude metrics scale to the
+    plotted data (anchored at 0) instead of forcing an upper limit of 1.0.
+    """
+    if metric in _PHASE_COMPARE_METRICS:
+        fig.update_yaxes(range=[-180.0, 180.0])
+        return
+
+    y = np.asarray(y_vals, dtype=float)
+    y = y[np.isfinite(y)]
+    if y.size == 0:
+        fig.update_yaxes(autorange=True, rangemode="tozero")
+        return
+
+    ymax = float(np.nanmax(y))
+    ymin = float(np.nanmin(y))
+    if ymax <= 0.0:
+        fig.update_yaxes(range=[0.0, 1.0])
+        return
+
+    span = ymax - ymin
+    pad = max(0.05 * span, 0.05 * ymax) if span > 0.0 else 0.05 * ymax
+    fig.update_yaxes(range=[0.0, ymax + pad])
+
+
 def save_amp_phase_npz(output_path, result):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -218,6 +250,7 @@ def save_amp_phase_npz(output_path, result):
 
 
 __all__ = [
+    "apply_compare_plot_yaxes",
     "build_trace_index",
     "steady_state_gains",
     "compute_gains_for_fd_outputs",
