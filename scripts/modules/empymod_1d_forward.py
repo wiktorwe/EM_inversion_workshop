@@ -1,7 +1,37 @@
 """Empymod 1D layered forward for inversion results.
 
-This helper is used by `06_1d_empymod_results.ipynb` to recompute synthetic
-amp/phase (Hx and Hz) from the inverted layered resistivity model.
+LEGACY. The workshop's own 1D path no longer uses this module - the 2D FDTD
+data comes from a LINE source, which `empymod.dipole` (a 3D point dipole)
+cannot represent without ad-hoc corrections. Notebooks 05/06 use
+`analytic_1d_forward` (rockem-suite's exact 2D line-source solver) instead.
+This module survives only for the `third_party/empy_blockinv/examples/`
+scripts, which use it as a generic 1D forward to demonstrate the inversion
+driver.
+
+empymod `ab` CONVENTION: the tens digit is the RECEIVER and the units digit
+is the SOURCE (electric 1/2/3 = x/y/z, magnetic 4/5/6 = x/y/z). So
+
+    ab=44  Hx receiver <- Hx source   (diagonal, order-insensitive)
+    ab=64  Hz receiver <- Hx source   (NOT 46)
+    ab=46  Hx receiver <- Hz source
+
+This module previously had it backwards (`ab_hxhz` defaulted to 46, and
+`ab_with_z_oriented_source` incremented the receiver digit rather than the
+source digit), so its "Hz" channel was really "Hx from a Hz source" and its
+tilt mixing rotated the receiver instead of the source. The error is
+invisible on the diagonal and only flips the SIGN of the cross terms for a
+same-depth inline receiver line; it becomes a real 10-40% discrepancy once
+source and receiver are at different depths.
+
+KNOWN BUG, NOT FIXED (legacy module, no current caller hits it):
+`_forward_component` disambiguates a 1-D `empymod.dipole` return by assuming
+it is indexed by FREQUENCY. With `nfreq == 1` and `nrx > 1` the return is
+indexed by RECEIVER instead, and the `np.repeat` branch then broadcasts it
+to `(nrx, nrx)` rather than `(1, nrx)` - silently wrong shape and wrong
+values. Only reachable when forward modelling a single frequency at several
+receivers; the `third_party/empy_blockinv/examples/` scripts all pass
+multiple frequencies. Fix by branching on `resp.size == nrx` before the
+`ndim == 1` check if this module is ever brought back into use.
 """
 
 from __future__ import annotations
@@ -18,12 +48,20 @@ def wrap_phase_rad(phi: np.ndarray) -> np.ndarray:
 
 
 def ab_with_z_oriented_source(ab_code: int) -> int:
-    """Map empirical component code to the z-oriented source counterpart."""
+    """Map a component code to its z-oriented SOURCE counterpart.
+
+    empymod's `ab` is RECEIVER-then-SOURCE: the tens digit is the receiver,
+    the units digit is the source (electric 1/2/3 = x/y/z, magnetic
+    4/5/6 = x/y/z). So swapping an x-oriented source for a z-oriented one
+    is `+2` on the UNITS digit: 44 (Hx<-Hx) -> 46 (Hx<-Hz).
+
+    This used to add 2 to the tens digit, which changes the RECEIVER, not
+    the source - see the module docstring.
+    """
     ab = int(ab_code)
-    src_code = ab // 10
-    rec_code = ab % 10
-    # In this workshop's empymod encoding, (+2) changes x->z within E/H families.
-    return (src_code + 2) * 10 + rec_code
+    rec_code = ab // 10
+    src_code = ab % 10
+    return rec_code * 10 + (src_code + 2)
 
 
 def forward_empymod_1d_layered_amp_phase(
@@ -35,7 +73,7 @@ def forward_empymod_1d_layered_amp_phase(
     off_z: np.ndarray,
     tilt_deg: float,
     ab_hxh: int = 44,
-    ab_hxhz: int = 46,
+    ab_hxhz: int = 64,
     verb: int = 0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Forward model a layered 1D earth and return amp/phase for Hx and Hz.

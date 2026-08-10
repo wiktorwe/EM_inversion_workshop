@@ -16,12 +16,19 @@ This folder is the module-oriented script codebase used by the GUI notebooks
     `runinv.sh` (used by Step 03)
 - `rockem_bridge.py`: locates the validated `rockem-suite` checkout (default
   `~/software/new_rockem/rockem-suite`, override via `ROCKEM_SUITE_ROOT`), puts
-  its `python/` package and the layered Green's-function solver's `shared/`
-  directory on `sys.path`, and re-exports `rockem.config`/`model`/`run`/
-  `survey`/`utils`/`wavelet`, the analytic solvers (`line_source_fields_layered`,
-  `magnetic_line_source_fields_layered`, `GreensSolverError`),
-  `steady_state_phasor`, and `binary_path()`. Import this before anything else
-  that needs `rockem.*` or the analytic solvers.
+  its `python/` package and the validation examples' `shared/` directory on
+  `sys.path`, and re-exports `rockem.config`/`model`/`run`/
+  `survey`/`utils`/`wavelet`, the analytic solvers from `rockem.greens`
+  (`line_source_fields_layered`, `magnetic_line_source_fields_layered`,
+  `magnetic_z_line_source_fields_layered`,
+  `tilted_magnetic_line_source_fields_layered`, `project_tilted_h`,
+  `GreensSolverError`), `steady_state_phasor`, and `binary_path()`. Import this
+  before anything else that needs `rockem.*` or the analytic solvers.
+  The Green's solvers are package code as of rockem-suite `6723d49`; they used
+  to be example-local files under
+  `doc/examples/validate_layered_1d_model/shared/`. `phasor.py` did not move,
+  which is why that directory is still on `sys.path`. `rockem.greens` imports
+  `scipy` (`scipy.special.hankel2`) at module level.
 - `segy.py`: SEGY read/write helpers, resistivity resampling to a template
   grid, and `pad_resistivity_for_depth_margin` (pads a loaded model in depth
   if it falls short of `design_explicit_fd`'s required source/receiver
@@ -45,7 +52,11 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   point-dipole forward. No longer imported by any of the six workshop
   notebooks; kept only because the vendored `third_party/empy_blockinv`
   example scripts still reference it. Use `analytic_1d_forward.py` instead
-  for anything workshop-related.
+  for anything workshop-related. Two things to know before reusing it:
+  empymod's `ab` code is RECEIVER-then-SOURCE (`ab=64` is Hz-from-Hx, not
+  `46`) - this module had it transposed until the `rockem.greens` migration;
+  and `_forward_component` still has an unfixed shape bug for `nfreq == 1`
+  with several receivers. Both are documented in the module docstring.
 
 ## `scripts/templates/`
 

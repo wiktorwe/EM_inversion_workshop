@@ -11,7 +11,7 @@ by calling `empymod.dipole` directly and then papering over the resulting
 constant, a sqrt(offset) amplitude "spreading" factor, a forced
 time-derivative on the FDTD side) - see the git history this workshop
 inherited. `magnetic_line_source_fields_layered` (rockem-suite,
-`doc/examples/validate_layered_1d_model/shared/greens_layered_2d.py`) gives
+`rockem.greens.greens_layered_2d`) gives
 the EXACT 2D line-source answer for a 1D layered earth directly, with no
 correction constants: it is the analytic counterpart of a `WavesEmTE2D`
 `source_field="HX"` run, validated against explicit TE2D FDTD to within a
@@ -38,7 +38,7 @@ class ForwardRejected(Exception):
 
 @dataclass
 class Layer1D:
-    """Duck-types `rockem.model.LayerSpec` (the fields `layers_to_empymod`/
+    """Duck-types `rockem.model.LayerSpec` (the fields `layers_to_stack`/
     `magnetic_line_source_fields_layered` actually read: `resistivity_ohm_m`,
     `thickness_m`, `permittivity`) - the last layer's `thickness_m` MUST be
     `None` (halfspace)."""
@@ -95,15 +95,26 @@ def forward_1d_gains(
     cannot evaluate this candidate model - callers in an automated search
     must catch this and assign an `inf` cost.
 
-    IMPORTANT: also raises `ForwardRejected` if `rx_depth_m` is too close
-    to `tx_depth_m` (within ~0.15 skin depths) - the underlying kx-integral
-    truncation is confirmed WRONG (not just unstable), not merely
-    under-resolved, that close to the source (see the rockem-suite skill's
-    gotcha on this). A survey with receivers at the SAME depth as the
-    source (a common logging/borehole convention, and this workshop's own
-    default `gz0 == sz0`) will hit this on every call - the 1D inversion
-    stage needs a genuine depth offset between source and receivers to use
-    this solver as a reference/calibration tool.
+    SAME-DEPTH RECEIVERS ARE FINE. The solver splits the primary (closed
+    form, in the source layer's own whole space) from the secondary
+    (quadrature), so `rx_depth_m == tx_depth_m` - this workshop's own
+    default `gz0 == sz0` - evaluates correctly. The old "needs >= ~0.15
+    skin depths of depth offset" restriction applied to the pre-
+    decomposition solver and no longer exists.
+
+    What DOES still raise `ForwardRejected`, all via `GreensSolverError`:
+    - a receiver at the source point (`offset ~ 0` AND same depth) - the
+      true line-source field is genuinely singular there;
+    - the SOURCE within `0.01 * delta_min` of a CONTRASTED interface. The
+      solver centres the layer stack on `tx_depth_m`, so a candidate whose
+      cumulative thicknesses put an interface at the middle of the span
+      lands on the transmitter. This is a thin forbidden slab, not a
+      systematic failure: measured ~0.6% of draws over this workshop's
+      default 5-layer prior (99 m span, 2-6 kHz, 2-100 Ohm-m). Rejected
+      candidates simply cost `inf`;
+    - a receiver in a DIFFERENT layer than the source but within
+      `0.3 * delta_min` of it in depth. Cannot fire for a colinear survey
+      (`dz == 0` implies same layer).
     """
     rho = np.asarray(rho, dtype=float).reshape(-1)
     thickness = np.asarray(thickness, dtype=float).reshape(-1)
@@ -154,7 +165,7 @@ def check_kx_convergence(
 ) -> dict:
     """Spot-check `_default_lam_max`'s kx-grid sizing heuristic across the
     ACTUAL prior bounds used by this inversion, not just the one model
-    `greens_layered_2d.py` ships validated against - see the rockem-suite
+    `rockem.greens.greens_layered_2d` ships validated against - see the rockem-suite
     skill's gotcha on this (`_default_lam_max` sizes off the model's most
     conductive layer; wrong-but-stable-looking convergence is possible if
     the heuristic under-resolves a high-contrast draw). Doubles `n_nodes`

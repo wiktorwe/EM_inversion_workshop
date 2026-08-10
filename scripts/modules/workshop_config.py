@@ -253,17 +253,19 @@ def validate_config(cfg: WorkshopConfig) -> list[tuple[str, bool, str]]:
         segy_ok,
         str(cfg.default_segy),
     ))
-    greens = (
-        root
-        / "doc"
-        / "examples"
-        / "validate_layered_1d_model"
-        / "shared"
-        / "greens_layered_2d.py"
-    )
+    # Since rockem-suite 6723d49 the 2D Green's solvers are package code
+    # (`rockem.greens`), not example-local files under doc/examples/.
+    greens = root / "python" / "rockem" / "greens" / "greens_layered_2d.py"
     checks.append((
         "analytic greens solver",
         greens.is_file(),
         str(greens),
+    ))
+    # `phasor.py` did NOT move - `rockem_bridge` still puts this dir on sys.path.
+    phasor = root / "doc" / "examples" / "validate_layered_1d_model" / "shared" / "phasor.py"
+    checks.append((
+        "steady-state phasor helper",
+        phasor.is_file(),
+        str(phasor),
     ))
     return checks
