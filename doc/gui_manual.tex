@@ -265,7 +265,11 @@ The explicit-engine MPI FD binary must be installed: \texttt{mpiEmmodTE2d} (CPU)
 
   \item \textbf{Buttons} — \textbf{Run modelling (background)}, \textbf{Stop run}, \textbf{Refresh run status}, \textbf{Load FD outputs}, \textbf{Compute channel-gain amplitude/phase}, \textbf{Save processed results} (writes NPZ under \texttt{Data/processed/}), \textbf{Quit GUI server}.
 
-  \item \textbf{FDTD--analytic calibration (homogeneous rho\_min)} — \textbf{Prepare calibration run} writes a homogeneous-earth FDTD case under \texttt{calibration\_homogeneous/} (same \texttt{dx}/\texttt{dt}/survey as production, resistivity = \texttt{rho\_min} from Step 01). \textbf{Run calibration FDTD} executes it. \textbf{Compute C and save} fits a global complex scale \texttt{C(f)} so FDTD gain $\approx C \times$ analytic gain (rockem-suite: $|C| \approx \mathrm{dx}^2$) and stores it in \texttt{setup\_metadata.json} for Steps 05/06.
+  \item \textbf{FDTD--analytic calibration (homogeneous rho\_min)} — A single \textbf{Calibrate (prepare, run, fit C)} button does the whole step. It writes a homogeneous-earth FDTD case under \texttt{calibration\_homogeneous/} (production \texttt{dx}/\texttt{dt}/offsets, resistivity = \texttt{rho\_min} from Step 01), runs one explicit TE2D job, and fits a global complex scale \texttt{C(f)} so FDTD gain $\approx C \times$ analytic gain (rockem-suite: $|C| \approx \mathrm{dx}^2$), storing it in \texttt{setup\_metadata.json} for Steps 05/06. The run blocks the GUI until it finishes, which is quick because the domain is sized for the survey rather than the full model.
+
+  The calibration domain is built around the survey with the transmitter at its centre, following rockem-suite's own calibration reference. The production model's extents are deliberately not reused: that model carries the SEG-Y origin (\texttt{segy\_ox}/\texttt{segy\_oz}), while a homogeneous grid is always written with origin 0, so the survey's absolute coordinates would land outside the grid and the engine would record all-zero traces without any error — reported previously as $|C| = 0$ at every frequency. All-zero calibration traces now raise an explicit error instead.
+
+  In a colinear survey (\texttt{rz0} = \texttt{tz0}) the Hz scatter reported in the QC line is large and can be ignored: an Hx-type source has an Hz null at the source depth, so the homogeneous Hz reference is essentially zero and \texttt{C} is determined by Hx.
 
 \end{itemize}
 

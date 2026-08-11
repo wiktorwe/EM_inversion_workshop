@@ -27,6 +27,21 @@ from scripts.modules.rockem_bridge import (
 VALIDATED_REL_ERROR_FLOOR = 0.03
 CALIBRATION_SUBDIR = "calibration_homogeneous"
 CALIBRATION_CFG_NAME = "mod_cal.cfg"
+# Keep sources/receivers this many cells clear of the PML when the survey's own
+# aperture margin is unavailable (rockem-suite gotchas: 8-16 cells).
+MIN_PML_CLEARANCE_CELLS = 16
+
+_REQUIRED_META_FIELDS = (
+    "rho_min_ohm_m",
+    "eps_r_used",
+    "dx_model_target_m",
+    "dt_model_target_s",
+    "tz0_m",
+    "rz0_m",
+    "rx0_m",
+    "drx_m",
+    "nrx",
+)
 
 
 def load_setup_metadata(path: Path | str) -> dict:
@@ -37,7 +52,7 @@ def load_setup_metadata(path: Path | str) -> dict:
 
 
 def _require_meta_fields(meta: Mapping[str, Any]) -> dict:
-    missing = [k for k in ("rho_min_ohm_m", "eps_r_used", "dx_model_target_m", "dt_model_target_s") if k not in meta]
+    missing = [k for k in _REQUIRED_META_FIELDS if k not in meta]
     if missing:
         raise KeyError(
             f"setup_metadata.json missing {missing}. Re-run 01_fw_setup 'Apply outputs' "
@@ -50,38 +65,46 @@ def calibration_run_dir(fwd_2d_dir: Path | str) -> Path:
     return Path(fwd_2d_dir) / CALIBRATION_SUBDIR
 
 
-def _domain_size_m(meta: Mapping[str, Any], fwd_2d_dir: Path) -> Tuple[float, float]:
-    nx = meta.get("segy_nx")
-    nz = meta.get("segy_nz")
-    dx = float(meta.get("dx_model_target_m", meta.get("segy_dx", 1.0)))
-    dz = float(meta.get("segy_dz", dx))
-    if nx is not None and nz is not None:
-        return float(max(nx - 1, 1)) * dx, float(max(nz - 1, 1)) * dz
-    sg_path = fwd_2d_dir / "sg.rss"
-    if not sg_path.exists():
-        raise FileNotFoundError(f"Cannot infer domain size: missing {sg_path} and segy_nx/nz in metadata.")
-    from third_party.rockseis.io.rsfile import rsfile
+def calibration_geometry(meta: Mapping[str, Any]) -> dict:
+    """Purpose-sized homogeneous domain with the transmitter at its centre.
 
-    f = rsfile()
-    f.read(str(sg_path))
-    gdx = float(f.geomD[0])
-    gdz = float(f.geomD[2] if f.geomD.size > 2 else f.geomD[1])
-    nx_g = int(f.geomN[0])
-    nz_g = int(f.geomN[2] if f.geomN.size > 2 else f.geomN[1])
-    return float(max(nx_g - 1, 1)) * gdx, float(max(nz_g - 1, 1)) * gdz
+    Mirrors rockem-suite's own calibration reference
+    (`validate_layered_1d_model/run_explicit_2d_hx_source.py`), which builds a
+    domain around the survey and centres the source in it.
 
+    The production model's extents deliberately are NOT reused: the production
+    `sg.rss` carries the SEG-Y origin (`segy_ox`/`segy_oz`, e.g. a section
+    starting several km down), whereas `build_homogeneous_grid` fixes the grid
+    origin at 0. Writing the survey's absolute tx/rx coordinates into such a
+    grid puts them outside it, and the engine then records all-zero traces with
+    no error at all (see rockem-suite's aperture/geometry gotchas), which fits
+    a calibration constant of exactly zero.
 
-def _survey_line_from_metadata(meta: Mapping[str, Any]) -> Tuple[float, float, np.ndarray, np.ndarray]:
-    tx_x = float(meta["tx0_m"])
-    tx_z = float(meta["tz0_m"])
-    rx0 = float(meta["rx0_m"])
-    drx = float(meta["drx_m"])
-    rz = float(meta["rz0_m"])
-    nrx = int(meta.get("nrx", 1))
-    off_x = rx0 + drx * np.arange(nrx, dtype=float)
-    rx_x = tx_x + off_x
-    rx_z = np.full(nrx, rz, dtype=float)
-    return tx_x, tx_z, rx_x, rx_z
+    Only offsets and the tx-to-rx depth separation are physically meaningful
+    for a homogeneous whole space, so re-centring the survey is free.
+    """
+    dx = float(meta["dx_model_target_m"])
+    nrx = max(1, int(meta.get("nrx", 1)))
+    off_x = float(meta["rx0_m"]) + float(meta["drx_m"]) * np.arange(nrx, dtype=float)
+    dz_rx = float(meta["rz0_m"]) - float(meta["tz0_m"])
+
+    max_off = float(np.max(np.abs(off_x))) if off_x.size else 0.0
+    # `01_fw_setup` sizes apertx as 2*max_offset + aperture_margin; recover that
+    # same margin and hold it clear of the PML on every side, in x and in depth.
+    margin = max(float(meta.get("apertx_m", 0.0)) - 2.0 * max_off, MIN_PML_CLEARANCE_CELLS * dx)
+
+    half_x = max_off + margin
+    half_z = abs(dz_rx) + margin
+    return {
+        "lx": 2.0 * half_x,
+        "lz": 2.0 * half_z,
+        "tx_x": half_x,
+        "tx_z": half_z,
+        "rx_x": half_x + off_x,
+        "rx_z": np.full(off_x.shape, half_z + dz_rx, dtype=float),
+        "off_x": off_x,
+        "margin_m": margin,
+    }
 
 
 def homogeneous_analytic_gains(
@@ -209,8 +232,12 @@ def rel_floor_pct(*, rel_floor: float) -> float:
 def prepare_homogeneous_calibration_run(
     fwd_2d_dir: Path | str,
     setup_meta_path: Path | str,
-) -> Path:
-    """Write homogeneous calibration FDTD inputs under calibration_homogeneous/."""
+) -> dict:
+    """Write homogeneous calibration FDTD inputs under calibration_homogeneous/.
+
+    Returns the run directory together with the domain/survey it built, so the
+    caller can report the geometry that the fit will actually be measured on.
+    """
     fwd_2d_dir = Path(fwd_2d_dir)
     meta = _require_meta_fields(load_setup_metadata(setup_meta_path))
     run_dir = calibration_run_dir(fwd_2d_dir)
@@ -227,20 +254,19 @@ def prepare_homogeneous_calibration_run(
     apertx = float(meta.get("apertx_m", 200.0))
     fd_order = int(meta.get("fd_order", 2))
 
-    lx, lz = _domain_size_m(meta, fwd_2d_dir)
+    geo = calibration_geometry(meta)
     grid = rockem_model.build_homogeneous_grid(
         resistivity_ohm_m=rho_min,
-        domain_size_m=[lx, lz],
+        domain_size_m=[geo["lx"], geo["lz"]],
         dx=dx,
         permittivity=eps_r,
         dim=2,
     )
     rockem_model.write_model_rss(grid, str(run_dir / "sg.rss"), str(run_dir / "ep.rss"))
 
-    tx_x, tx_z, rx_x, rx_z = _survey_line_from_metadata(meta)
     rockem_survey.write_survey_from_offsets(
         str(run_dir / "Survey.rss"),
-        tx_x=tx_x, tx_z=tx_z, rx_x=rx_x, rx_z=rx_z, dim=2,
+        tx_x=geo["tx_x"], tx_z=geo["tx_z"], rx_x=geo["rx_x"], rx_z=geo["rx_z"], dim=2,
     )
 
     wav_src = fwd_2d_dir / "wav2d.rss"
@@ -268,7 +294,8 @@ def prepare_homogeneous_calibration_run(
         records=("EY", "HX", "HZ"),
         recordfiles={"HX": "Data/Hxshot.rss", "HZ": "Data/Hzshot.rss", "EY": "Data/Eyshot.rss"},
     )
-    return run_dir
+    nx, _, nz = grid.conductivity.shape
+    return {"run_dir": run_dir, "nx": int(nx), "nz": int(nz), **geo}
 
 
 def compute_calibration_from_fdtd_outputs(
@@ -313,6 +340,14 @@ def compute_calibration_from_fdtd_outputs(
     )
     fdtd_hx = np.asarray(fdtd["Hx"]["gain"], dtype=complex)
     fdtd_hz = np.asarray(fdtd["Hz"]["gain"], dtype=complex)
+    if not np.any(np.abs(fdtd_hx) > 0.0) and not np.any(np.abs(fdtd_hz) > 0.0):
+        raise ValueError(
+            "Calibration FDTD recorded all-zero traces, so no calibration can be fitted "
+            "(this would otherwise be reported as |C| = 0 at every frequency). The usual "
+            "cause is a source or receiver outside the modelled grid, which the engine "
+            "records as zeros without raising. Check the calibration survey against the "
+            f"domain written in {run_dir}."
+        )
 
     cal = compute_global_calibration_from_gains(
         fdtd_hx, fdtd_hz, analytic_hx, analytic_hz, freqs_hz,
@@ -348,8 +383,8 @@ def load_global_calibration(setup_meta_path: Path | str) -> dict:
     block = meta.get("fdtd_analytic_calibration")
     if block is None:
         raise KeyError(
-            "No fdtd_analytic_calibration in setup_metadata.json — run notebook 02 "
-            "'Compute C' after the homogeneous calibration FDTD."
+            "No fdtd_analytic_calibration in setup_metadata.json — press 'Calibrate' "
+            "in notebook 02 to run the homogeneous calibration and store C."
         )
     out = dict(block)
     if "C_hxhz_shared" not in out:
@@ -387,8 +422,10 @@ __all__ = [
     "VALIDATED_REL_ERROR_FLOOR",
     "CALIBRATION_SUBDIR",
     "CALIBRATION_CFG_NAME",
+    "MIN_PML_CLEARANCE_CELLS",
     "apply_calibration_to_gains",
     "calibration_for_inversion",
+    "calibration_geometry",
     "calibration_run_dir",
     "compute_calibration_from_fdtd_outputs",
     "compute_global_calibration_from_gains",
