@@ -4,6 +4,11 @@ Computes a single Tx-independent complex scale C[f] per frequency such that
 FDTD channel gain ≈ C * analytic channel gain, following rockem-suite's
 convention (see validate_layered_1d_model/README.md: C = FDTD/analytic,
 |C| ≈ dx² for homogeneous whole-space).
+
+The calibration survey keeps production x-offsets but places receivers both
+above and below the transmitter so Hx-source Hz is nonzero (rockem-suite
+Hx validation uses rx_dz ≠ 0 for the same reason). Production rz0/tz0 is
+unchanged.
 """
 
 from __future__ import annotations
@@ -30,6 +35,12 @@ CALIBRATION_CFG_NAME = "mod_cal.cfg"
 # Keep sources/receivers this many cells clear of the PML when the survey's own
 # aperture margin is unavailable (rockem-suite gotchas: 8-16 cells).
 MIN_PML_CLEARANCE_CELLS = 16
+# rockem-suite Hx-source validation uses rx_dz = -20 m so Ey/Hz are nonzero in a
+# homogeneous medium (they null exactly at the source depth). Calibration always
+# places receivers both above and below the Tx by at least this amount (and at
+# least two grid cells), independent of the production survey's rz0/tz0.
+CALIBRATION_RX_DZ_M = 20.0
+MIN_CALIBRATION_RX_DZ_CELLS = 2
 
 _REQUIRED_META_FIELDS = (
     "rho_min_ohm_m",
@@ -65,6 +76,12 @@ def calibration_run_dir(fwd_2d_dir: Path | str) -> Path:
     return Path(fwd_2d_dir) / CALIBRATION_SUBDIR
 
 
+def calibration_rx_dz_m(meta: Mapping[str, Any]) -> float:
+    """Vertical Tx–Rx separation used only for the homogeneous calibration survey."""
+    dx = float(meta["dx_model_target_m"])
+    return float(max(CALIBRATION_RX_DZ_M, MIN_CALIBRATION_RX_DZ_CELLS * dx))
+
+
 def calibration_geometry(meta: Mapping[str, Any]) -> dict:
     """Purpose-sized homogeneous domain with the transmitter at its centre.
 
@@ -80,29 +97,41 @@ def calibration_geometry(meta: Mapping[str, Any]) -> dict:
     no error at all (see rockem-suite's aperture/geometry gotchas), which fits
     a calibration constant of exactly zero.
 
-    Only offsets and the tx-to-rx depth separation are physically meaningful
-    for a homogeneous whole space, so re-centring the survey is free.
+    Production x-offsets are kept. Receivers are placed both ABOVE and BELOW the
+    transmitter by ``calibration_rx_dz_m`` so Hx-source Ey/Hz are nonzero even
+    when the production survey is colinear (`rz0 == tz0`). Only the calibration
+    FDTD/analytic pair uses this geometry; the production survey is unchanged.
     """
     dx = float(meta["dx_model_target_m"])
     nrx = max(1, int(meta.get("nrx", 1)))
-    off_x = float(meta["rx0_m"]) + float(meta["drx_m"]) * np.arange(nrx, dtype=float)
-    dz_rx = float(meta["rz0_m"]) - float(meta["tz0_m"])
+    off_x_line = float(meta["rx0_m"]) + float(meta["drx_m"]) * np.arange(nrx, dtype=float)
+    dz_cal = calibration_rx_dz_m(meta)
 
-    max_off = float(np.max(np.abs(off_x))) if off_x.size else 0.0
+    max_off = float(np.max(np.abs(off_x_line))) if off_x_line.size else 0.0
     # `01_fw_setup` sizes apertx as 2*max_offset + aperture_margin; recover that
     # same margin and hold it clear of the PML on every side, in x and in depth.
     margin = max(float(meta.get("apertx_m", 0.0)) - 2.0 * max_off, MIN_PML_CLEARANCE_CELLS * dx)
 
     half_x = max_off + margin
-    half_z = abs(dz_rx) + margin
+    half_z = abs(dz_cal) + margin
+
+    # Two lines at the same x-offsets: one above Tx, one below.
+    off_x = np.concatenate([off_x_line, off_x_line])
+    off_z = np.concatenate([
+        np.full(off_x_line.shape, +dz_cal, dtype=float),
+        np.full(off_x_line.shape, -dz_cal, dtype=float),
+    ])
     return {
         "lx": 2.0 * half_x,
         "lz": 2.0 * half_z,
         "tx_x": half_x,
         "tx_z": half_z,
         "rx_x": half_x + off_x,
-        "rx_z": np.full(off_x.shape, half_z + dz_rx, dtype=float),
+        "rx_z": half_z + off_z,
         "off_x": off_x,
+        "off_z": off_z,
+        "dz_cal_m": dz_cal,
+        "nrx_line": int(nrx),
         "margin_m": margin,
     }
 
@@ -111,23 +140,37 @@ def homogeneous_analytic_gains(
     freqs_hz: Sequence[float],
     off_x: Sequence[float],
     tx_depth_m: float,
-    rx_depth_m: float,
+    rx_depth_m: float | Sequence[float],
     rho_ohm_m: float,
     eps_r: float,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Complex (Hx, Hz) gains [nfreq, nrx] for a homogeneous halfspace."""
+    """Complex (Hx, Hz) gains [nfreq, nrx] for a homogeneous whole-space.
+
+    ``rx_depth_m`` may be a scalar (all receivers at one depth) or a per-receiver
+    depth array matching ``off_x``.
+    """
     freqs_hz = np.asarray(freqs_hz, dtype=float).reshape(-1)
     off_x = np.asarray(off_x, dtype=float).reshape(-1)
+    rx_depths = np.asarray(rx_depth_m, dtype=float).reshape(-1)
+    if rx_depths.size == 1:
+        rx_depths = np.full(off_x.shape, float(rx_depths[0]), dtype=float)
+    if rx_depths.shape != off_x.shape:
+        raise ValueError(
+            f"rx_depth_m size {rx_depths.size} does not match off_x size {off_x.size}"
+        )
+
     layers = [Layer1D(float(rho_ohm_m), None, float(eps_r))]
     nfreq, nrx = freqs_hz.size, off_x.size
     hx = np.full((nfreq, nrx), np.nan, dtype=complex)
     hz = np.full((nfreq, nrx), np.nan, dtype=complex)
     for ifreq, f in enumerate(freqs_hz):
-        _, hx_f, hz_f = magnetic_line_source_fields_layered(
-            off_x, float(f), layers, float(tx_depth_m), rx_depth_m=float(rx_depth_m),
-        )
-        hx[ifreq, :] = hx_f
-        hz[ifreq, :] = hz_f
+        for depth in np.unique(rx_depths):
+            mask = rx_depths == depth
+            _, hx_f, hz_f = magnetic_line_source_fields_layered(
+                off_x[mask], float(f), layers, float(tx_depth_m), rx_depth_m=float(depth),
+            )
+            hx[ifreq, mask] = hx_f
+            hz[ifreq, mask] = hz_f
     return hx, hz
 
 
@@ -330,13 +373,12 @@ def compute_calibration_from_fdtd_outputs(
     rx_x = np.asarray(geo["rx_x"], dtype=float)
     rx_z = np.asarray(geo["rx_z"], dtype=float)
     off_x = rx_x - tx_x
-    rx_depth = float(rx_z[0])
 
     rho_min = float(meta["rho_min_ohm_m"])
     eps_r = float(meta["eps_r_used"])
     dx = float(meta["dx_model_target_m"])
     analytic_hx, analytic_hz = homogeneous_analytic_gains(
-        freqs_hz, off_x, tx_z, rx_depth, rho_min, eps_r,
+        freqs_hz, off_x, tx_z, rx_z, rho_min, eps_r,
     )
     fdtd_hx = np.asarray(fdtd["Hx"]["gain"], dtype=complex)
     fdtd_hz = np.asarray(fdtd["Hz"]["gain"], dtype=complex)
@@ -348,6 +390,12 @@ def compute_calibration_from_fdtd_outputs(
             "records as zeros without raising. Check the calibration survey against the "
             f"domain written in {run_dir}."
         )
+    if not np.any(np.abs(analytic_hz) > 0.0):
+        raise ValueError(
+            "Homogeneous analytic Hz is identically zero on the calibration survey, so Hz "
+            "cannot enter C. Receivers must sit above/below the transmitter "
+            f"(expected |dz| >= {calibration_rx_dz_m(meta):g} m)."
+        )
 
     cal = compute_global_calibration_from_gains(
         fdtd_hx, fdtd_hz, analytic_hx, analytic_hz, freqs_hz,
@@ -356,6 +404,11 @@ def compute_calibration_from_fdtd_outputs(
     cal["fdtd_result"] = fdtd
     cal["analytic_hx"] = analytic_hx
     cal["analytic_hz"] = analytic_hz
+    cal["calibration_rx_dz_m"] = float(calibration_rx_dz_m(meta))
+    cal["notes"] = (
+        f"{cal.get('notes', '')} Calibration receivers at ±{cal['calibration_rx_dz_m']:.4g} m "
+        "relative to Tx (Hx and Hz both enter C)."
+    ).strip()
     return cal
 
 
@@ -422,10 +475,13 @@ __all__ = [
     "VALIDATED_REL_ERROR_FLOOR",
     "CALIBRATION_SUBDIR",
     "CALIBRATION_CFG_NAME",
+    "CALIBRATION_RX_DZ_M",
+    "MIN_CALIBRATION_RX_DZ_CELLS",
     "MIN_PML_CLEARANCE_CELLS",
     "apply_calibration_to_gains",
     "calibration_for_inversion",
     "calibration_geometry",
+    "calibration_rx_dz_m",
     "calibration_run_dir",
     "compute_calibration_from_fdtd_outputs",
     "compute_global_calibration_from_gains",
