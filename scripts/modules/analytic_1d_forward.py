@@ -20,12 +20,15 @@ few percent (see that repo's README).
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from scripts.modules.rockem_bridge import GreensSolverError, magnetic_line_source_fields_layered
+
+_CONTRASTED_INTERFACE_MSG = "contrasted layer interface"
 
 
 class ForwardRejected(Exception):
@@ -67,6 +70,10 @@ def layers_from_rho_thk(rho: np.ndarray, thickness: np.ndarray, eps_r: float) ->
     return layers
 
 
+def _is_contrasted_interface_rejection(exc: GreensSolverError) -> bool:
+    return _CONTRASTED_INTERFACE_MSG in str(exc)
+
+
 def forward_1d_gains(
     rho: np.ndarray,
     thickness: np.ndarray,
@@ -76,6 +83,8 @@ def forward_1d_gains(
     rx_depth_m: float,
     eps_r: float,
     n_nodes: int = 120,
+    allow_empymod_fallback: bool = False,
+    stats: Optional[Dict[str, bool]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Complex (Hx, Hz) channel gain per unit Kx source, shape [nfreq, nrx].
 
@@ -115,6 +124,12 @@ def forward_1d_gains(
     - a receiver in a DIFFERENT layer than the source but within
       `0.3 * delta_min` of it in depth. Cannot fire for a colinear survey
       (`dz == 0` implies same layer).
+
+    When `allow_empymod_fallback=True`, contrasted-interface rejections fall
+    back to the slower empymod y-integrated line-source reference (requires
+    `pip install empymod`). Other rejections still raise `ForwardRejected`.
+    If `stats` is provided, it receives `stats["empymod_fallback"]=True` when
+    any frequency used the fallback.
     """
     rho = np.asarray(rho, dtype=float).reshape(-1)
     thickness = np.asarray(thickness, dtype=float).reshape(-1)
@@ -134,18 +149,44 @@ def forward_1d_gains(
     nfreq, nrx = freqs_hz.size, off_x.size
     hx = np.full((nfreq, nrx), np.nan, dtype=complex)
     hz = np.full((nfreq, nrx), np.nan, dtype=complex)
+    used_empymod_fallback = False
     for ifreq, f in enumerate(freqs_hz):
         try:
             _, hx_f, hz_f = magnetic_line_source_fields_layered(
                 off_x, float(f), layers, float(tx_depth_m), rx_depth_m=float(rx_depth_m), n_nodes=n_nodes,
             )
         except GreensSolverError as exc:
-            raise ForwardRejected(str(exc)) from exc
+            if allow_empymod_fallback and _is_contrasted_interface_rejection(exc):
+                try:
+                    from scripts.modules.empymod_line_source import forward_empymod_line_gains
+                except ImportError as import_exc:
+                    raise ForwardRejected(
+                        f"{exc}; empymod line-source fallback unavailable ({import_exc})"
+                    ) from import_exc
+                try:
+                    hx_fb, hz_fb = forward_empymod_line_gains(
+                        rho, thickness, np.asarray([f]), off_x, tx_depth_m, rx_depth_m, eps_r,
+                    )
+                except Exception as fb_exc:
+                    raise ForwardRejected(
+                        f"{exc}; empymod line-source fallback failed ({fb_exc})"
+                    ) from fb_exc
+                hx_f, hz_f = hx_fb[0], hz_fb[0]
+                used_empymod_fallback = True
+                warnings.warn(
+                    "analytic forward rejected on contrasted interface; "
+                    "used empymod line-source fallback",
+                    stacklevel=2,
+                )
+            else:
+                raise ForwardRejected(str(exc)) from exc
         hx[ifreq, :] = hx_f
         hz[ifreq, :] = hz_f
 
     if not (np.all(np.isfinite(hx)) and np.all(np.isfinite(hz))):
         raise ForwardRejected("non-finite analytic forward result")
+    if stats is not None and used_empymod_fallback:
+        stats["empymod_fallback"] = True
     return hx, hz
 
 
