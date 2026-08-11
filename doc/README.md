@@ -56,5 +56,6 @@ To restore a pristine checkout:
 ```
 
 This deletes `workspace/` including `setup_metadata.json`, calibration, and all
-`OneDRunN/REPORT.md` files. Re-run Steps 01–02 afterwards so later notebooks
-can remember frequencies and design parameters.
+`OneDRunN/REPORT.md` files. Re-run Steps 01–02 afterwards (including a Calibrate
+button in Step 02) so later notebooks can remember frequencies, design
+parameters, and the active `C(f)`.

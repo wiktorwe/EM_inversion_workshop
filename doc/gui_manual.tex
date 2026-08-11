@@ -56,7 +56,7 @@ workspace/
 
 \textbf{Example model:} \texttt{examples/Fault\_1.sgy} is a sample resistivity model committed with the repository. Load it in Step 01 (or set it as the default in Step 00).
 
-\textbf{Restore pristine state:} run \texttt{./clean.sh} from the workshop root to remove \texttt{workspace/}, Voila PID files, and caches. This also deletes \texttt{setup\_metadata.json}, the FDTD--analytic calibration, and all \texttt{OneDRunN/REPORT.md} files — re-run Step 01 (and Calibrate in Step 02) afterwards. Use \texttt{./clean.sh --dry-run} to preview, or \texttt{./clean.sh -y} to skip confirmation.
+\textbf{Restore pristine state:} run \texttt{./clean.sh} from the workshop root to remove \texttt{workspace/}, Voila PID files, and caches. This also deletes \texttt{setup\_metadata.json}, the FDTD--analytic calibration, and all \texttt{OneDRunN/REPORT.md} files — re-run Step 01 (and a Calibrate button in Step 02) afterwards. Use \texttt{./clean.sh --dry-run} to preview, or \texttt{./clean.sh -y} to skip confirmation.
 
 %=============================================================================
 \section{Environment setup}
@@ -160,7 +160,7 @@ Each start script writes its own Voila PID file (e.g.\ \texttt{.voila\_fw\_setup
 \begin{enumerate}
   \item \textbf{Step 00 — Configure} — Set \texttt{rockem-suite} root, MPI launcher (\texttt{mpirun}), default process count, default SEG-Y (\texttt{examples/Fault\_1.sgy}), workspace directory name, and optional GPU flags for 2D forward (\texttt{mpiEmmodTE2dGpu}) and inversion (\texttt{mpiEminvTE2dGpu}). Click \textbf{Validate} to check CPU/GPU binaries, \texttt{nvidia-smi}, and paths, then \textbf{Save} to write \texttt{workshop\_config.json}.
   \item \textbf{Step 01 — FW setup} — Load a SEG-Y resistivity model, configure survey and FD design, then \textbf{Generate FD inputs (Finalize setup)}. Outputs go to \texttt{workspace/2D/forward/}.
-  \item \textbf{Step 02 — FW modelling and data visualization} — Run forward modelling, load \texttt{Hxshot.rss}/\texttt{Hzshot.rss}, compute channel-gain amplitude/phase, run homogeneous FDTD--analytic calibration (\texttt{C}), and inspect results.
+  \item \textbf{Step 02 — FW modelling and data visualization} — Run forward modelling, load \texttt{Hxshot.rss}/\texttt{Hzshot.rss}, compute channel-gain amplitude/phase, run FDTD--analytic calibration (\texttt{C}; homogeneous \texttt{rho\_min} or 1D lateral average of the true model), and inspect results.
   \item \textbf{Step 03 — 2D inversion} — Generate inversion inputs into \texttt{workspace/2D/inversion/input/}, then run inversion into \texttt{workspace/2D/inversion/RunN/}.
   \item \textbf{Step 04 — 2D inversion results} — Compare models and data; export SEG-Y to \texttt{workspace/2D/results/RunN/}.
   \item \textbf{Step 05 — 1D inversion} — Run per-transmitter 1D layered inversion; outputs go to \texttt{workspace/1D/inversion/RunN/}.
@@ -263,13 +263,16 @@ The explicit-engine MPI FD binary must be installed: \texttt{mpiEmmodTE2d} (CPU)
 
   \item \textbf{frequency, tx, local rx} — Selectors for display.
 
-  \item \textbf{Buttons} — \textbf{Run modelling (background)}, \textbf{Stop run}, \textbf{Refresh run status}, \textbf{Load FD outputs}, \textbf{Compute channel-gain amplitude/phase}, \textbf{Save processed results} (writes NPZ under \texttt{Data/processed/}), \textbf{Quit GUI server}.
+  \item \textbf{Buttons} — \textbf{Run modelling (background)}, \textbf{Stop run}, \textbf{Refresh run status}, \textbf{Load FD outputs}, \textbf{Compute channel-gain amplitude/phase}, \textbf{Save processed results} (writes NPZ under \texttt{Data/processed/}), \textbf{Calibrate (homogeneous rho\_min)}, \textbf{Calibrate (1D lateral average of true model)}, \textbf{Quit GUI server}.
 
-  \item \textbf{FDTD--analytic calibration (homogeneous rho\_min)} — A single \textbf{Calibrate (prepare, run, fit C)} button does the whole step. It writes a homogeneous-earth FDTD case under \texttt{calibration\_homogeneous/} (production \texttt{dx}/\texttt{dt}/x-offsets, resistivity = \texttt{rho\_min} from Step 01), runs one explicit TE2D job, and fits a global complex scale \texttt{C(f)} so FDTD gain $\approx C \times$ analytic gain (rockem-suite: $|C| \approx \mathrm{dx}^2$), storing it in \texttt{setup\_metadata.json} for Steps 05/06. The run blocks the GUI until it finishes, which is quick because the domain is sized for the survey rather than the full model.
+  \item \textbf{FDTD--analytic calibration} — Two buttons write a purpose-sized source-centred domain, run one explicit TE2D job, and fit a global complex scale \texttt{C(f)} so FDTD gain $\approx C \times$ analytic gain (rockem-suite: $|C| \approx \mathrm{dx}^2$), storing it in \texttt{setup\_metadata.json} for Steps 05/06. The \textbf{last successful} calibration overwrites the active \texttt{C}. The run blocks the GUI until it finishes (domain is small).
 
-  The calibration domain is built around the survey with the transmitter at its centre, following rockem-suite's own calibration reference. The production model's extents are deliberately not reused: that model carries the SEG-Y origin (\texttt{segy\_ox}/\texttt{segy\_oz}), while a homogeneous grid is always written with origin 0, so the survey's absolute coordinates would land outside the grid and the engine would record all-zero traces without any error — reported previously as $|C| = 0$ at every frequency. All-zero calibration traces now raise an explicit error instead.
+  \begin{itemize}
+    \item \textbf{Calibrate (homogeneous rho\_min)} — Homogeneous earth at \texttt{rho\_min}; production \texttt{dx}/\texttt{dt}/x-offsets; receivers both above and below the transmitter (typically $\pm 20\,\mathrm{m}$) so Hz enters \texttt{C} even for a colinear production survey.
+    \item \textbf{Calibrate (1D lateral average of true model)} — Vertically varying 1D earth: mean resistivity across $x$ of production \texttt{sg.rss}. Survey offsets (\texttt{rx0}/\texttt{drx}/\texttt{nrx}, \texttt{rz0}-\texttt{tz0}), \texttt{apertx}, \texttt{dx}/\texttt{dt}/\texttt{eps\_r}/PML follow Step 01. With layer contrasts, Hz need not vanish when \texttt{rz0}=\texttt{tz0}.
+  \end{itemize}
 
-  Calibration receivers are placed both above and below the transmitter (typically $\pm 20\,\mathrm{m}$, matching rockem-suite's Hx-source validation), independent of whether the production survey is colinear. That makes homogeneous Hz nonzero so both Hx and Hz enter \texttt{C}; the production \texttt{rz0}/\texttt{tz0} geometry used by Steps 05/06 is unchanged.
+  The calibration domain is built around the survey with the transmitter at its centre (production SEG-Y origin is not reused — a homogeneous/layered grid is written with origin 0). All-zero calibration traces raise an explicit error.
 
 \end{itemize}
 
@@ -343,7 +346,7 @@ View 2D inversion results: select a run (\texttt{RunN}) and model (\texttt{sg0},
 
 \subsection{Purpose}
 
-An independent 1D layered inversion, run separately for each transmitter, against rockem-suite's validated analytic magnetic (Hx) line-source Green's function. Reads channel-gain data from \texttt{workspace/2D/forward/Data/} (same phasor extraction as Step 02) — it does not need Steps 03/04 to have been run. A single global FDTD--analytic calibration constant \texttt{C(f)} from Step 02 is applied to all analytic predictions before misfit; results are combined into a pseudo-2D section under \texttt{workspace/1D/inversion/RunN/}.
+An independent 1D layered inversion, run separately for each transmitter, against rockem-suite's validated analytic magnetic (Hx) line-source Green's function. Reads channel-gain data from \texttt{workspace/2D/forward/Data/} (same phasor extraction as Step 02) — it does not need Steps 03/04 to have been run. The active global FDTD--analytic calibration \texttt{C(f)} from Step 02 (last successful homogeneous or lateral-average run) is applied to all analytic predictions before misfit; results are combined into a pseudo-2D section under \texttt{workspace/1D/inversion/RunN/}.
 
 \subsection{Parameters (physical meaning and impact)}
 
@@ -359,9 +362,11 @@ An independent 1D layered inversion, run separately for each transmitter, agains
 
   \item \textbf{w\_hxh, w\_hxhz, Tikhonov lambda} — Misfit weights and smoothness penalty.
 
+  \item \textbf{Single-Tx tuners (QC Tx)} — Parallel helpers that operate on the transmitter selected in \textbf{QC Tx} (not the full survey). \textbf{Tune DE budget} raises \texttt{(popsize, maxiter)} through a fixed ladder until several random seeds agree on the total objective (relative spread $\le 5\%$); \textbf{Apply DE recommendation} writes the cheapest stable pair into the widgets. \textbf{Tune lambda L-curve} sweeps Tikhonov $\lambda$ at the current DE settings, plots $\log_{10}(\mathrm{data\ misfit})$ vs $\log_{10}(\mathrm{reg\ norm})$, and picks the corner; \textbf{Apply lambda recommendation} sets the widget. Prefer DE tune before $\lambda$ if the default $10/30$ budget is seed-unstable. Uses \texttt{n\_jobs} and \textbf{tune seeds}.
+
   \item \textbf{dx\_out, dz\_out, zmax (0=auto)} — Pseudo-2D output grid.
 
-  \item \textbf{Buttons} — \textbf{Reload features}, \textbf{Check kx convergence}, \textbf{Run all Tx inversions}, \textbf{Build pseudo-2D section}, \textbf{Export results} (NPZ/JSON/\texttt{REPORT.md} under current \texttt{RunN}), \textbf{Refresh QC plots}, \textbf{Quit GUI server}.
+  \item \textbf{Buttons} — \textbf{Reload features}, \textbf{Check kx convergence}, \textbf{Run all Tx inversions}, \textbf{Build pseudo-2D section}, \textbf{Export results} (NPZ/JSON/\texttt{REPORT.md} under current \texttt{RunN}), \textbf{Refresh QC plots}, \textbf{Tune DE budget (QC Tx)}, \textbf{Tune lambda L-curve (QC Tx)}, \textbf{Apply DE/lambda recommendation}, \textbf{Quit GUI server}.
 
   \item \textbf{Per-run report} — Every successful inversion writes under \texttt{workspace/1D/inversion/OneDRunN/}: \texttt{REPORT.md} (human-readable), \texttt{analytic\_1d\_inversion\_summary.json} (full parameters: frequencies, \texttt{n\_periods}, optimizer, weights, bounds, calibration, misfit/$\chi^2$), and \texttt{run\_metadata.json}. You should not need to remember what was run.
 

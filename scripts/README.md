@@ -49,10 +49,19 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   `mod.cfg` update helpers.
 - `fd_visualization.py`: FD shot-gather loading and steady-state
   phasor-ratio channel-gain extraction (`compute_gains_for_fd_outputs`).
+- `fdtd_analytic_calibration.py`: global FDTD–analytic scale `C(f)` for
+  Steps 05/06. Notebook 02 offers two Earth models (last successful run wins
+  in `setup_metadata.json`): homogeneous `rho_min` (receivers at ±depth so Hz
+  enters `C`), or 1D lateral average of production `sg.rss` with Step 01
+  survey offsets / apertx. Homogeneous path still uses a purpose-sized
+  source-centred domain; lateral-average reuses production `rz0−tz0`.
 - `analytic_1d_forward.py`: 1D layered forward model for the workshop's
   magnetic (Hx) line source, via rockem-suite's validated
   `magnetic_line_source_fields_layered` - used by `05_1d_inversion`'s
-  inversion and calibration. Replaces `empymod_1d_forward.py` (below).
+  inversion and by FDTD–analytic calibration. Replaces `empymod_1d_forward.py`
+  (below).
+- `inversion_tuning.py`: single-Tx DE budget and Tikhonov λ L-curve helpers
+  used by Step 05 (parallel over seeds / λ values on the QC transmitter).
 - `inversion.py`: 2D inversion input preparation and `inv.cfg` writing
   helpers, used by `03_2d_inversion`.
 - `empymod_1d_forward.py`: **legacy** - the pre-redesign empymod-based 1D

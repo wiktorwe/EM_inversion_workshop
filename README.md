@@ -34,7 +34,9 @@ After enabling GPU forward, re-run **Step 01 → Finalize setup** so
 - **Step 01** writes `workspace/2D/forward/setup_metadata.json` with frequencies
   (`flist_hz`), `n_periods_extract`, `eps_r_used`, survey geometry, and FD design.
   Later notebooks (02, 04, 05, 06) read those values as widget defaults.
-- **Step 02** appends the global FDTD–analytic calibration into the same file.
+- **Step 02** appends the global FDTD–analytic calibration into the same file
+  (homogeneous `rho_min` or 1D lateral average of the true model; last successful
+  run overwrites the active `C`).
 - **Step 05** writes a full per-run report under each
   `workspace/1D/inversion/OneDRunN/` folder:
   `REPORT.md` (human-readable), `analytic_1d_inversion_summary.json`, and
@@ -129,7 +131,7 @@ Cleaning **does** delete remembered setup parameters and run reports:
 - calibration stored there by Step 02
 - every `OneDRunN/REPORT.md` and summary from Step 05
 
-After `./clean.sh`, re-run Step 01 (and Calibrate in Step 02) before Steps 02–06.
+After `./clean.sh`, re-run Step 01 (and a Calibrate button in Step 02) before Steps 02–06.
 
 ## 4) Workspace layout
 
@@ -165,7 +167,8 @@ Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
 
 2. **Step 02 — FW modelling and data visualization**
    - Frequencies / `n_periods` load from `setup_metadata.json`.
-   - Run forward modelling; run **Calibrate** to store global `C(f)`.
+   - Run forward modelling; use a **Calibrate** button (homogeneous `rho_min`
+     or 1D lateral average of the true model) to store global `C(f)`.
    - Inspect Hx/Hz data, amplitudes, and phases.
 
 3. **Step 03 — 2D inversion**

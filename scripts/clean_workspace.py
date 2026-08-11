@@ -116,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"\nCleaned {len(targets)} path(s). Workshop restored to pristine state.\n"
-        "Re-run 00/01 (and 02 Calibrate) before using notebooks 02–06."
+        "Re-run 00/01 (and a Calibrate button in 02) before using notebooks 02–06."
     )
     return 0
 

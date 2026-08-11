@@ -40,7 +40,7 @@ def calibration_summary_block(cal: Optional[Mapping[str, Any]]) -> dict:
     """Compact calibration block for reports (from notebook 05 cfg or loaded meta)."""
     if not isinstance(cal, dict) or cal.get("C") is None:
         return {
-            "method": "global_homogeneous_rho_min",
+            "method": "none",
             "present": False,
             "notes": "No calibration loaded for this run.",
         }
@@ -160,6 +160,8 @@ def render_1d_run_report_md(summary: Mapping[str, Any]) -> str:
         f"- **Tikhonov lambda:** {summary.get('reg_lambda')}",
         "",
         "## Calibration (global C from notebook 02)",
+        "",
+        "Active `C(f)` from the last successful Step 02 Calibrate (homogeneous or lateral-average).",
         "",
         f"- **Present:** {cal.get('present')}",
         f"- **Method:** {cal.get('method')}",
