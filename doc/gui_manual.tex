@@ -160,7 +160,7 @@ Each start script writes its own Voila PID file (e.g.\ \texttt{.voila\_fw\_setup
 \begin{enumerate}
   \item \textbf{Step 00 — Configure} — Set \texttt{rockem-suite} root, MPI launcher (\texttt{mpirun}), default process count, default SEG-Y (\texttt{examples/Fault\_1.sgy}), workspace directory name, and optional GPU flags for 2D forward (\texttt{mpiEmmodTE2dGpu}) and inversion (\texttt{mpiEminvTE2dGpu}). Click \textbf{Validate} to check CPU/GPU binaries, \texttt{nvidia-smi}, and paths, then \textbf{Save} to write \texttt{workshop\_config.json}.
   \item \textbf{Step 01 — FW setup} — Load a SEG-Y resistivity model, configure survey and FD design, then \textbf{Generate FD inputs (Finalize setup)}. Outputs go to \texttt{workspace/2D/forward/}.
-  \item \textbf{Step 02 — FW modelling and data visualization} — Run forward modelling, load \texttt{Hxshot.rss}/\texttt{Hzshot.rss}, compute channel-gain amplitude/phase, and inspect results.
+  \item \textbf{Step 02 — FW modelling and data visualization} — Run forward modelling, load \texttt{Hxshot.rss}/\texttt{Hzshot.rss}, compute channel-gain amplitude/phase, run homogeneous FDTD--analytic calibration (\texttt{C}), and inspect results.
   \item \textbf{Step 03 — 2D inversion} — Generate inversion inputs into \texttt{workspace/2D/inversion/input/}, then run inversion into \texttt{workspace/2D/inversion/RunN/}.
   \item \textbf{Step 04 — 2D inversion results} — Compare models and data; export SEG-Y to \texttt{workspace/2D/results/RunN/}.
   \item \textbf{Step 05 — 1D inversion} — Run per-transmitter 1D layered inversion; outputs go to \texttt{workspace/1D/inversion/RunN/}.
@@ -265,6 +265,8 @@ The explicit-engine MPI FD binary must be installed: \texttt{mpiEmmodTE2d} (CPU)
 
   \item \textbf{Buttons} — \textbf{Run modelling (background)}, \textbf{Stop run}, \textbf{Refresh run status}, \textbf{Load FD outputs}, \textbf{Compute channel-gain amplitude/phase}, \textbf{Save processed results} (writes NPZ under \texttt{Data/processed/}), \textbf{Quit GUI server}.
 
+  \item \textbf{FDTD--analytic calibration (homogeneous rho\_min)} — \textbf{Prepare calibration run} writes a homogeneous-earth FDTD case under \texttt{calibration\_homogeneous/} (same \texttt{dx}/\texttt{dt}/survey as production, resistivity = \texttt{rho\_min} from Step 01). \textbf{Run calibration FDTD} executes it. \textbf{Compute C and save} fits a global complex scale \texttt{C(f)} so FDTD gain $\approx C \times$ analytic gain (rockem-suite: $|C| \approx \mathrm{dx}^2$) and stores it in \texttt{setup\_metadata.json} for Steps 05/06.
+
 \end{itemize}
 
 %=============================================================================
@@ -337,7 +339,7 @@ View 2D inversion results: select a run (\texttt{RunN}) and model (\texttt{sg0},
 
 \subsection{Purpose}
 
-An independent 1D layered inversion, run separately for each transmitter, against rockem-suite's validated analytic magnetic (Hx) line-source Green's function. Reads channel-gain data from \texttt{workspace/2D/forward/Data/} (same phasor extraction as Step 02) — it does not need Steps 03/04 to have been run. Each transmitter is calibrated against the analytic solver on the blocky 1D model beneath it, then inverted independently; results are combined into a pseudo-2D section under \texttt{workspace/1D/inversion/RunN/}.
+An independent 1D layered inversion, run separately for each transmitter, against rockem-suite's validated analytic magnetic (Hx) line-source Green's function. Reads channel-gain data from \texttt{workspace/2D/forward/Data/} (same phasor extraction as Step 02) — it does not need Steps 03/04 to have been run. A single global FDTD--analytic calibration constant \texttt{C(f)} from Step 02 is applied to all analytic predictions before misfit; results are combined into a pseudo-2D section under \texttt{workspace/1D/inversion/RunN/}.
 
 \subsection{Parameters (physical meaning and impact)}
 
@@ -348,8 +350,6 @@ An independent 1D layered inversion, run separately for each transmitter, agains
   \item \textbf{n\_layers, z\_start, z\_end, rho\_bg, rho\_min, rho\_max, thk\_min, thk\_max} — 1D model parameterization and search bounds.
 
   \item \textbf{optimizer} — Differential Evolution, Dual Annealing, or BlockInv (Gauss--Newton).
-
-  \item \textbf{calibration} — Fixed calibration constant (recommended) or per-frequency source factor.
 
   \item \textbf{maxiter, popsize, maxfun, seed, N runs/Tx, n\_jobs, blk\_iter} — Optimizer and ensemble settings.
 
