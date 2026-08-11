@@ -176,60 +176,109 @@ def patch_runinv_template(template_text: str, cfg: WorkshopConfig, nproc: int) -
     return content
 
 
-def validate_config(cfg: WorkshopConfig) -> list[tuple[str, bool, str]]:
-    """Return (check_name, passed, detail) tuples."""
-    checks: list[tuple[str, bool, str]] = []
+def validate_config(cfg: WorkshopConfig) -> list[tuple[str, str, str]]:
+    """Return (check_name, status, detail) tuples.
+
+    ``status`` is ``"ok"``, ``"fail"``, or ``"info"``. GPU binaries and
+    ``nvidia-smi`` are informational when the corresponding Use GPU boxes are
+    off; they become hard failures only when a GPU option is enabled.
+    """
+    checks: list[tuple[str, str, str]] = []
     root = cfg.rockem_suite_root
     python_dir = root / "python"
     checks.append((
         "rockem-suite python/",
-        python_dir.is_dir(),
+        "ok" if python_dir.is_dir() else "fail",
         str(python_dir),
     ))
 
     cpu_fwd_ok, cpu_fwd_detail = _binary_check(cfg, CPU_FORWARD_TE2D)
-    checks.append((f"CPU forward binary ({CPU_FORWARD_TE2D})", cpu_fwd_ok, cpu_fwd_detail))
+    checks.append((
+        f"CPU forward binary ({CPU_FORWARD_TE2D})",
+        "ok" if cpu_fwd_ok else "fail",
+        cpu_fwd_detail,
+    ))
 
     cpu_inv_ok, cpu_inv_detail = _binary_check(cfg, CPU_INVERSION_TE2D)
-    checks.append((f"CPU inversion binary ({CPU_INVERSION_TE2D})", cpu_inv_ok, cpu_inv_detail))
+    checks.append((
+        f"CPU inversion binary ({CPU_INVERSION_TE2D})",
+        "ok" if cpu_inv_ok else "fail",
+        cpu_inv_detail,
+    ))
 
     gpu_fwd_ok, gpu_fwd_detail = _binary_check(cfg, GPU_FORWARD_TE2D)
     gpu_inv_ok, gpu_inv_detail = _binary_check(cfg, GPU_INVERSION_TE2D)
     gpu_smi_ok, gpu_smi_detail = _nvidia_smi_devices()
-
-    checks.append((
-        "GPU forward binary (optional)",
-        gpu_fwd_ok,
-        gpu_fwd_detail if gpu_fwd_ok else f"{gpu_fwd_detail} — build with: make -f Makefile.gpu bin/{GPU_FORWARD_TE2D}",
-    ))
-    checks.append((
-        "GPU inversion binary (optional)",
-        gpu_inv_ok,
-        gpu_inv_detail if gpu_inv_ok else f"{gpu_inv_detail} — build with: make -f Makefile.gpu bin/{GPU_INVERSION_TE2D}",
-    ))
-    checks.append((
-        "NVIDIA driver / nvidia-smi",
-        gpu_smi_ok,
-        gpu_smi_detail if gpu_smi_ok else gpu_smi_detail,
-    ))
+    want_gpu = bool(cfg.use_gpu_forward_2d or cfg.use_gpu_inversion_2d)
 
     if cfg.use_gpu_forward_2d:
+        if gpu_fwd_ok:
+            checks.append((f"GPU forward binary ({GPU_FORWARD_TE2D})", "ok", gpu_fwd_detail))
+        else:
+            checks.append((
+                f"GPU forward binary ({GPU_FORWARD_TE2D})",
+                "fail",
+                f"{gpu_fwd_detail} — build with: make -f Makefile.gpu bin/{GPU_FORWARD_TE2D}, "
+                "or untick Use GPU for 2D forward",
+            ))
+    elif gpu_fwd_ok:
+        checks.append((f"GPU forward binary (optional)", "ok", gpu_fwd_detail))
+    else:
         checks.append((
-            f"GPU forward enabled → {GPU_FORWARD_TE2D}",
-            gpu_fwd_ok and gpu_smi_ok,
-            "ready" if (gpu_fwd_ok and gpu_smi_ok) else "enable GPU forward only when binary and GPU are available",
+            "GPU forward binary (optional)",
+            "info",
+            f"not built ({gpu_fwd_detail}) — only needed if Use GPU for 2D forward is ticked",
         ))
+
     if cfg.use_gpu_inversion_2d:
+        if gpu_inv_ok:
+            checks.append((f"GPU inversion binary ({GPU_INVERSION_TE2D})", "ok", gpu_inv_detail))
+        else:
+            checks.append((
+                f"GPU inversion binary ({GPU_INVERSION_TE2D})",
+                "fail",
+                f"{gpu_inv_detail} — build with: make -f Makefile.gpu bin/{GPU_INVERSION_TE2D}, "
+                "or untick Use GPU for 2D inversion",
+            ))
+    elif gpu_inv_ok:
+        checks.append((f"GPU inversion binary (optional)", "ok", gpu_inv_detail))
+    else:
         checks.append((
-            f"GPU inversion enabled → {GPU_INVERSION_TE2D}",
-            gpu_inv_ok and gpu_smi_ok,
-            "ready" if (gpu_inv_ok and gpu_smi_ok) else "enable GPU inversion only when binary and GPU are available",
+            "GPU inversion binary (optional)",
+            "info",
+            f"not built ({gpu_inv_detail}) — only needed if Use GPU for 2D inversion is ticked",
         ))
+
+    if gpu_smi_ok:
+        checks.append(("NVIDIA GPU / nvidia-smi", "ok", gpu_smi_detail))
+    elif want_gpu:
+        untick = []
+        if cfg.use_gpu_forward_2d:
+            untick.append("Use GPU for 2D forward")
+        if cfg.use_gpu_inversion_2d:
+            untick.append("Use GPU for 2D inversion")
+        checks.append((
+            "NVIDIA GPU / nvidia-smi",
+            "fail",
+            f"GPU not detected ({gpu_smi_detail}). Untick {', '.join(untick)}, "
+            "or install an NVIDIA driver so nvidia-smi works.",
+        ))
+    else:
+        checks.append((
+            "NVIDIA GPU / nvidia-smi",
+            "info",
+            f"GPU not detected ({gpu_smi_detail}) — fine while Use GPU boxes are unticked",
+        ))
+
+    if cfg.use_gpu_forward_2d and gpu_fwd_ok and gpu_smi_ok:
+        checks.append((f"GPU forward enabled → {GPU_FORWARD_TE2D}", "ok", "ready"))
+    if cfg.use_gpu_inversion_2d and gpu_inv_ok and gpu_smi_ok:
+        checks.append((f"GPU inversion enabled → {GPU_INVERSION_TE2D}", "ok", "ready"))
 
     mpirun = shutil.which(cfg.mpirun)
     checks.append((
         f"MPI launcher ({cfg.mpirun})",
-        mpirun is not None,
+        "ok" if mpirun is not None else "fail",
         mpirun or "not found on PATH",
     ))
     if mpirun:
@@ -245,12 +294,12 @@ def validate_config(cfg: WorkshopConfig) -> list[tuple[str, bool, str]]:
         except Exception as exc:
             ok = False
             detail = str(exc)
-        checks.append(("mpirun --version", ok, detail))
+        checks.append(("mpirun --version", "ok" if ok else "fail", detail))
 
     segy_ok = cfg.default_segy.exists()
     checks.append((
         "default SEG-Y",
-        segy_ok,
+        "ok" if segy_ok else "fail",
         str(cfg.default_segy),
     ))
     # Since rockem-suite 6723d49 the 2D Green's solvers are package code
@@ -258,14 +307,14 @@ def validate_config(cfg: WorkshopConfig) -> list[tuple[str, bool, str]]:
     greens = root / "python" / "rockem" / "greens" / "greens_layered_2d.py"
     checks.append((
         "analytic greens solver",
-        greens.is_file(),
+        "ok" if greens.is_file() else "fail",
         str(greens),
     ))
     # `phasor.py` did NOT move - `rockem_bridge` still puts this dir on sys.path.
     phasor = root / "doc" / "examples" / "validate_layered_1d_model" / "shared" / "phasor.py"
     checks.append((
         "steady-state phasor helper",
-        phasor.is_file(),
+        "ok" if phasor.is_file() else "fail",
         str(phasor),
     ))
     return checks

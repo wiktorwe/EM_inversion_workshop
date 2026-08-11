@@ -10,8 +10,9 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   flags for 2D TE2D forward/inversion). Import via `load_config()` before
   `rockem_bridge`. Key helpers:
   - `forward_engine_te2d()` / `inversion_engine_te2d()` — CPU or GPU binary name
-  - `validate_config()` — checks CPU binaries (required), GPU binaries and
-    `nvidia-smi` (required when GPU flags are on)
+  - `validate_config()` — checks CPU binaries (required); GPU binaries and
+    `nvidia-smi` are informational when GPU flags are off, and required
+    (with an untick hint) when they are on
   - `patch_runinv_template()` — inject MPI launcher and inversion binary into
     `runinv.sh` (used by Step 03)
 - `rockem_bridge.py`: locates the validated `rockem-suite` checkout (default
