@@ -15,6 +15,12 @@ This folder is the module-oriented script codebase used by the GUI notebooks
     (with an untick hint) when they are on
   - `patch_runinv_template()` — inject MPI launcher and inversion binary into
     `runinv.sh` (used by Step 03)
+- `setup_defaults.py`: read shared defaults from
+  `workspace/2D/forward/setup_metadata.json` (`flist_hz`, `n_periods_extract`,
+  `eps_r_used`, rho bounds). Notebooks 02/04/05/06 must use this instead of
+  hardcoding frequencies.
+- `run_report.py`: build/write per-run `analytic_1d_inversion_summary.json` and
+  human-readable `REPORT.md` for Step 05; HTML panel helper for Step 06.
 - `rockem_bridge.py`: locates the validated `rockem-suite` checkout (default
   `~/software/new_rockem/rockem-suite`, override via `ROCKEM_SUITE_ROOT`), puts
   its `python/` package and the validation examples' `shared/` directory on
@@ -75,7 +81,9 @@ This folder is the module-oriented script codebase used by the GUI notebooks
 
 Other utilities:
 
-- `../clean.sh` / `clean_workspace.py`: remove the entire `workspace/` tree and restore a pristine checkout.
+- `../clean.sh` / `clean_workspace.py`: remove the entire `workspace/` tree and
+  restore a pristine checkout. Prints an explicit warning that setup metadata,
+  calibration, and 1D `REPORT.md` files are deleted.
 - `validate_notebooks.py`: smoke-test each notebook's setup cell (`python scripts/validate_notebooks.py --expect-rockem-missing` if rockem-suite is not configured yet).
 - `normalize_notebooks.py`: add nbformat cell ids to all workshop notebooks (run after editing `.ipynb` files).
 - `../jupyter_config/jupyter_server_config.py`: Voila websocket settings used by `start_*.sh`.

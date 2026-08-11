@@ -29,6 +29,19 @@ Enable them in **Step 00** (`use_gpu_forward_2d` / `use_gpu_inversion_2d` in
 After enabling GPU forward, re-run **Step 01 → Finalize setup** so
 `setup_metadata.json` records the GPU engine.
 
+### Remembered parameters (do not retype them)
+
+- **Step 01** writes `workspace/2D/forward/setup_metadata.json` with frequencies
+  (`flist_hz`), `n_periods_extract`, `eps_r_used`, survey geometry, and FD design.
+  Later notebooks (02, 04, 05, 06) read those values as widget defaults.
+- **Step 02** appends the global FDTD–analytic calibration into the same file.
+- **Step 05** writes a full per-run report under each
+  `workspace/1D/inversion/OneDRunN/` folder:
+  `REPORT.md` (human-readable), `analytic_1d_inversion_summary.json`, and
+  `run_metadata.json` (optimizer, weights, bounds, frequencies, calibration).
+  Step 06 loads those when you open a run — you do not need to remember what
+  frequencies or inversion settings were used.
+
 ### Environment setup
 
 **Option A — Conda**
@@ -108,7 +121,15 @@ To remove all generated artifacts (forward models, inversion runs, results):
 ./clean.sh --dry-run
 ```
 
-This removes `workspace/` plus Voila PID files and caches. It does not delete notebooks, scripts, or the example model in `examples/`.
+This removes `workspace/` plus Voila PID files and caches. It does **not** delete notebooks, scripts, or the example model in `examples/`.
+
+Cleaning **does** delete remembered setup parameters and run reports:
+
+- `setup_metadata.json` (frequencies / design from Step 01)
+- calibration stored there by Step 02
+- every `OneDRunN/REPORT.md` and summary from Step 05
+
+After `./clean.sh`, re-run Step 01 (and Calibrate in Step 02) before Steps 02–06.
 
 ## 4) Workspace layout
 
@@ -138,12 +159,13 @@ Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
 
 1. **Step 01 — FW setup**
    - Load a SEG-Y resistivity model (default: `examples/Fault_1.sgy`).
-   - Configure source/survey settings.
+   - Configure source/survey settings and frequency list.
    - Click **Generate FD inputs (Finalize setup)**.
-   - Creates `workspace/2D/forward/`.
+   - Creates `workspace/2D/forward/` and writes `setup_metadata.json` (remembered by later steps).
 
 2. **Step 02 — FW modelling and data visualization**
-   - Run forward modelling.
+   - Frequencies / `n_periods` load from `setup_metadata.json`.
+   - Run forward modelling; run **Calibrate** to store global `C(f)`.
    - Inspect Hx/Hz data, amplitudes, and phases.
 
 3. **Step 03 — 2D inversion**
@@ -151,12 +173,12 @@ Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
    - Start inversion and monitor progress.
 
 4. **Step 04 — 2D inversion results**
-   - Compare models and data.
+   - Compare models and data (freqs / `n_periods` from setup metadata).
    - Export outputs as needed.
 
 5. **Steps 05–06 — 1D inversion and results**
-   - Run 1D layered inversion on FD observations.
-   - Review and export pseudo-2D sections.
+   - Step 05 defaults freqs / `n_periods` / rho bounds from setup metadata; each run writes `REPORT.md`.
+   - Step 06 loads a run and shows its parameters (freqs, weights, optimizer) from that report.
 
 ## 6) Documentation
 

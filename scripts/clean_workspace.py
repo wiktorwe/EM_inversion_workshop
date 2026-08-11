@@ -88,6 +88,16 @@ def main(argv: list[str] | None = None) -> int:
     for path in targets:
         print(f"  {_rel(root, path)}")
 
+    print(
+        "\nNOTE: Cleaning deletes the entire workspace/, including:\n"
+        "  - setup_metadata.json (frequencies, n_periods, FD design from notebook 01)\n"
+        "  - FDTD–analytic calibration stored in that metadata (notebook 02)\n"
+        "  - all 1D run folders with REPORT.md / summary JSON (notebook 05)\n"
+        "  - 2D forward data, inversion runs, and results\n"
+        "After cleaning you must re-run notebook 01 (and recalibrate in 02) before\n"
+        "later notebooks can remember setup parameters."
+    )
+
     if args.dry_run:
         print("\n(dry run — no files deleted)")
         return 0
@@ -104,7 +114,10 @@ def main(argv: list[str] | None = None) -> int:
         elif path.exists() or path.is_symlink():
             path.unlink(missing_ok=True)
 
-    print(f"\nCleaned {len(targets)} path(s). Workshop restored to pristine state.")
+    print(
+        f"\nCleaned {len(targets)} path(s). Workshop restored to pristine state.\n"
+        "Re-run 00/01 (and 02 Calibrate) before using notebooks 02–06."
+    )
     return 0
 
 

@@ -56,7 +56,7 @@ workspace/
 
 \textbf{Example model:} \texttt{examples/Fault\_1.sgy} is a sample resistivity model committed with the repository. Load it in Step 01 (or set it as the default in Step 00).
 
-\textbf{Restore pristine state:} run \texttt{./clean.sh} from the workshop root to remove \texttt{workspace/}, Voila PID files, and caches. Use \texttt{./clean.sh --dry-run} to preview, or \texttt{./clean.sh -y} to skip confirmation.
+\textbf{Restore pristine state:} run \texttt{./clean.sh} from the workshop root to remove \texttt{workspace/}, Voila PID files, and caches. This also deletes \texttt{setup\_metadata.json}, the FDTD--analytic calibration, and all \texttt{OneDRunN/REPORT.md} files — re-run Step 01 (and Calibrate in Step 02) afterwards. Use \texttt{./clean.sh --dry-run} to preview, or \texttt{./clean.sh -y} to skip confirmation.
 
 %=============================================================================
 \section{Environment setup}
@@ -255,7 +255,7 @@ The explicit-engine MPI FD binary must be installed: \texttt{mpiEmmodTE2d} (CPU)
 
   \item \textbf{nproc} — Number of MPI processes for the FD run (default from Step 00 config).
 
-  \item \textbf{f\_min (Hz), n\_periods (of f\_min)} — Reference frequency and extraction window for steady-state phasor extraction (same convention as Step 05).
+  \item \textbf{f\_min (Hz), n\_periods (of f\_min)} — Reference frequency and extraction window for steady-state phasor extraction. Defaults come from \texttt{setup\_metadata.json} (Step 01), including \texttt{flist} and \texttt{n\_periods\_extract}; later notebooks reuse the same values.
 
   \item \textbf{component} — Hx or Hz magnetic field component.
 
@@ -349,9 +349,9 @@ An independent 1D layered inversion, run separately for each transmitter, agains
 
 \begin{itemize}
 
-  \item \textbf{Freqs (Hz), n\_periods (of f\_min)} — Channel-gain extraction settings (same convention as Step 02).
+  \item \textbf{Freqs (Hz), n\_periods (of f\_min)} — Channel-gain extraction settings. Defaults are read from \texttt{setup\_metadata.json} written by Step 01 (not hardcoded). Changing them here is allowed for experiments, but the values used for a finished run are stored in that run's report.
 
-  \item \textbf{n\_layers, z\_start, z\_end, rho\_bg, rho\_min, rho\_max, thk\_min, thk\_max} — 1D model parameterization and search bounds.
+  \item \textbf{n\_layers, z\_start, z\_end, rho\_bg, rho\_min, rho\_max, thk\_min, thk\_max} — 1D model parameterization and search bounds. \texttt{rho\_bg}/\texttt{rho\_min}/\texttt{rho\_max} are seeded from Step 01's \texttt{rho\_min\_ohm\_m}/\texttt{rho\_max\_ohm\_m} when present.
 
   \item \textbf{optimizer} — Differential Evolution, Dual Annealing, or BlockInv (Gauss--Newton).
 
@@ -361,7 +361,9 @@ An independent 1D layered inversion, run separately for each transmitter, agains
 
   \item \textbf{dx\_out, dz\_out, zmax (0=auto)} — Pseudo-2D output grid.
 
-  \item \textbf{Buttons} — \textbf{Reload features}, \textbf{Check kx convergence}, \textbf{Run all Tx inversions}, \textbf{Build pseudo-2D section}, \textbf{Export results} (NPZ/JSON under current \texttt{RunN}), \textbf{Refresh QC plots}, \textbf{Quit GUI server}.
+  \item \textbf{Buttons} — \textbf{Reload features}, \textbf{Check kx convergence}, \textbf{Run all Tx inversions}, \textbf{Build pseudo-2D section}, \textbf{Export results} (NPZ/JSON/\texttt{REPORT.md} under current \texttt{RunN}), \textbf{Refresh QC plots}, \textbf{Quit GUI server}.
+
+  \item \textbf{Per-run report} — Every successful inversion writes under \texttt{workspace/1D/inversion/OneDRunN/}: \texttt{REPORT.md} (human-readable), \texttt{analytic\_1d\_inversion\_summary.json} (full parameters: frequencies, \texttt{n\_periods}, optimizer, weights, bounds, calibration, misfit/$\chi^2$), and \texttt{run\_metadata.json}. You should not need to remember what was run.
 
 \end{itemize}
 
@@ -377,13 +379,13 @@ Visualize and export 1D inversion results from Step 05: pseudo-2D section (mean 
 
 \begin{itemize}
 
-  \item \textbf{Run} — Which \texttt{RunN} under \texttt{workspace/1D/inversion/} to load.
+  \item \textbf{Run} — Which \texttt{RunN} under \texttt{workspace/1D/inversion/} to load. Loading restores frequencies, \texttt{n\_periods}, and other settings from that run's \texttt{REPORT.md}/\texttt{summary.json} and shows a \textbf{Run parameters} panel — you do not re-enter what Step 05 used.
 
-  \item \textbf{x slice (m), z slice (m), bg rho (Ohm.m)} — Section display controls.
+  \item \textbf{x slice (m), z slice (m), bg rho (Ohm.m)} — Section display controls. Background resistivity defaults from the loaded run report when present.
 
   \item \textbf{Tx, Uncertainty} — Per-transmitter diagnostics and uncertainty band (1 std or 90\% CI).
 
-  \item \textbf{Freqs (Hz), component, plot, frequency, local rx, trace idx} — Data-comparison panel (same as Step 04).
+  \item \textbf{Freqs (Hz), n\_periods, component, plot, frequency, local rx, trace idx} — Data-comparison panel. Frequency list and \texttt{n\_periods} default from \texttt{setup\_metadata.json}, then from the loaded run report.
 
   \item \textbf{Buttons} — \textbf{Load run}, \textbf{Refresh run list}, \textbf{Rebuild section from saved layers}, \textbf{Refresh Tx plots}, \textbf{Load real data}, \textbf{Generate synthetics from inverted model}, \textbf{Export mean section to SEGY} (writes to \texttt{workspace/1D/results/RunN/}), \textbf{Quit GUI server}.
 
@@ -403,7 +405,7 @@ Visualize and export 1D inversion results from Step 05: pseudo-2D section (mean 
   \item \textbf{GPU validation fails} — Ensure \texttt{nvidia-smi} works, CUDA is installed, and GPU binaries exist under \texttt{\$ROCKEM\_SUITE\_ROOT/bin/}. Build targets in rockem-suite as shown in Environment setup. If you enabled GPU forward after Step 01, re-run \textbf{Finalize setup} in Step 01.
   \item \textbf{Wrong/stale rockem-suite checkout} — Step 00 validation checks for \texttt{magnetic\_line\_source\_fields\_layered} in the analytic solver shared directory.
   \item \textbf{Missing \texttt{joblib}} — Step 05 needs \texttt{joblib} for parallel ensemble runs.
-  \item \textbf{Stale artifacts} — Run \texttt{./clean.sh} to remove \texttt{workspace/} and start fresh.
+  \item \textbf{Stale artifacts} — Run \texttt{./clean.sh} to remove \texttt{workspace/} and start fresh. This also wipes remembered frequencies/calibration and all 1D \texttt{REPORT.md} files; re-run Steps 01--02 afterwards.
 \end{itemize}
 
 %=============================================================================
@@ -416,12 +418,13 @@ Visualize and export 1D inversion results from Step 05: pseudo-2D section (mean 
   \item \texttt{workspace/2D/inversion/input/} — 2D inversion input files (\texttt{inv.cfg}, \texttt{sg0.rss}, etc.).
   \item \texttt{workspace/2D/inversion/Run0/}, \texttt{Run1/}, \ldots — 2D inversion run directories (Steps 03/04).
   \item \texttt{workspace/2D/results/RunN/} — SEG-Y exports from Step 04.
-  \item \texttt{workspace/1D/inversion/Run0/}, \ldots — 1D inversion run directories (Steps 05/06).
+  \item \texttt{workspace/1D/inversion/Run0/}, \ldots — 1D inversion run directories (Steps 05/06), each with \texttt{REPORT.md}, \texttt{analytic\_1d\_inversion\_summary.json}, and \texttt{run\_metadata.json}.
+  \item \texttt{workspace/2D/forward/setup\_metadata.json} — Shared setup parameters from Step 01 (frequencies, \texttt{n\_periods}, survey, FD design) plus calibration from Step 02; later notebooks read this instead of hardcoding.
   \item \texttt{workspace/1D/results/RunN/} — SEG-Y exports from Step 06.
   \item \texttt{examples/Fault\_1.sgy} — Sample resistivity model (committed).
-  \item \texttt{scripts/modules/} — Python helpers (\texttt{workshop\_config.py}, \texttt{rockem\_bridge.py}, SEG-Y I/O, FD design, 1D analytic forward, 2D inversion helpers); see \texttt{scripts/README.md}.
+  \item \texttt{scripts/modules/} — Python helpers (\texttt{workshop\_config.py}, \texttt{setup\_defaults.py}, \texttt{run\_report.py}, \texttt{rockem\_bridge.py}, SEG-Y I/O, FD design, 1D analytic forward, 2D inversion helpers); see \texttt{scripts/README.md}.
   \item \texttt{scripts/templates/} — Templates for \texttt{inv.cfg}, \texttt{mod.cfg}, \texttt{runmod.sh}, \texttt{runinv.sh}, etc.
-  \item \texttt{scripts/clean\_workspace.py}, \texttt{clean.sh} — Remove all generated artifacts.
+  \item \texttt{scripts/clean\_workspace.py}, \texttt{clean.sh} — Remove all generated artifacts (including setup metadata and run reports).
   \item \texttt{third\_party/} — Vendored Rockseis Python code and BlockInv 1D inversion helpers.
 \end{itemize}
 

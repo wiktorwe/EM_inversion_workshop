@@ -54,3 +54,7 @@ To restore a pristine checkout:
 ```bash
 ./clean.sh
 ```
+
+This deletes `workspace/` including `setup_metadata.json`, calibration, and all
+`OneDRunN/REPORT.md` files. Re-run Steps 01–02 afterwards so later notebooks
+can remember frequencies and design parameters.
