@@ -571,22 +571,27 @@ def collect_1d_inv_rows(summary: Mapping, run_meta: Mapping) -> list[tuple[str, 
     ]
 
 
+def _survey_positions(ctx: ReportContext) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Absolute Tx/Rx coordinates for overlay on resistivity sections."""
+    tx_x, tx_z, rx_x, rx_z = survey_positions_from_meta(ctx.setup_meta)
+    survey_rss = ctx.fwd_dir / "Survey.rss"
+    if not survey_rss.exists():
+        return tx_x, tx_z, rx_x, rx_z
+    try:
+        traces = load_rss_traces(survey_rss)
+        src = np.column_stack((traces["src_x"], traces["src_z"]))
+        rec = np.column_stack((traces["rx_x"], traces["rx_z"]))
+        src_u = np.unique(np.round(src, 6), axis=0)
+        rec_u = np.unique(np.round(rec, 6), axis=0)
+        return src_u[:, 0], src_u[:, 1], rec_u[:, 0], rec_u[:, 1]
+    except Exception:
+        return tx_x, tx_z, rx_x, rx_z
+
+
 def write_fw_figures(ctx: ReportContext) -> None:
     sg = ctx.fwd_dir / "sg.rss"
     if sg.exists():
-        tx_x, tx_z, rx_x, rx_z = survey_positions_from_meta(ctx.setup_meta)
-        survey_rss = ctx.fwd_dir / "Survey.rss"
-        if survey_rss.exists():
-            try:
-                traces = load_rss_traces(survey_rss)
-                src = np.column_stack((traces["src_x"], traces["src_z"]))
-                rec = np.column_stack((traces["rx_x"], traces["rx_z"]))
-                src_u = np.unique(np.round(src, 6), axis=0)
-                rec_u = np.unique(np.round(rec, 6), axis=0)
-                tx_x, tx_z = src_u[:, 0], src_u[:, 1]
-                rx_x, rx_z = rec_u[:, 0], rec_u[:, 1]
-            except Exception:
-                pass
+        tx_x, tx_z, rx_x, rx_z = _survey_positions(ctx)
         x, z, rho = resistivity_from_sg_rss(sg)
         _try_figure(
             ctx,
@@ -681,6 +686,7 @@ def write_2d_figures(ctx: ReportContext) -> None:
     x_t, z_t, rho_t = resistivity_from_sg_rss(sg_true)
     x_i, z_i, rho_i = resistivity_from_sg_rss(sg_up)
     label = sg_up.name
+    tx_x, tx_z, rx_x, rx_z = _survey_positions(ctx)
     _try_figure(
         ctx,
         "inv2d_models",
@@ -693,6 +699,10 @@ def write_2d_figures(ctx: ReportContext) -> None:
         rho_i,
         ctx.figures_dir / "inv2d_models.pdf",
         inv_label=label,
+        tx_x=tx_x,
+        tx_z=tx_z,
+        rx_x=rx_x,
+        rx_z=rx_z,
     )
     _try_figure(
         ctx,
@@ -828,6 +838,7 @@ def write_1d_figures(ctx: ReportContext, data: Mapping, summary: Mapping) -> Non
         if rebuilt is not None:
             sec_x, sec_z, sec_rho, sec_std = rebuilt
     if sec_x is not None and sec_z is not None and sec_rho is not None:
+        tx_x, tx_z, rx_x, rx_z = _survey_positions(ctx)
         _try_figure(
             ctx,
             "inv1d_section",
@@ -840,6 +851,10 @@ def write_1d_figures(ctx: ReportContext, data: Mapping, summary: Mapping) -> Non
             true_x=true_x,
             true_z=true_z,
             true_rho=true_rho,
+            tx_x=tx_x,
+            tx_z=tx_z,
+            rx_x=rx_x,
+            rx_z=rx_z,
         )
     else:
         ctx.notes.append("1D pseudo-2D section skipped: no section arrays and rebuild failed.")

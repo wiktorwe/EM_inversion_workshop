@@ -109,12 +109,41 @@ def _heatmap(ax, x, z, rho, *, vmin, vmax, cmap="jet", title="", cbar_label="Ohm
     ax.set_ylabel("Depth (m)")
     if title:
         ax.set_title(title)
-    ax.invert_yaxis()
     ax.set_aspect("auto")
     if colorbar:
         cbar = ax.figure.colorbar(im, ax=ax, shrink=0.82, pad=0.02)
         cbar.set_label(cbar_label)
     return im
+
+
+def _depth_down(ax):
+    """Put larger depth at the bottom. Safe to call once on a shared y-axis."""
+    lo, hi = ax.get_ylim()
+    if lo < hi:
+        ax.invert_yaxis()
+
+
+def _scatter_survey(ax, tx_x=None, tx_z=None, rx_x=None, rx_z=None, *, legend=False):
+    handles = []
+    if tx_x is not None and tx_z is not None and np.size(tx_x):
+        h = ax.scatter(tx_x, tx_z, c="red", marker="x", s=36, linewidths=1.2, label="Sources", zorder=3)
+        handles.append(h)
+    if rx_x is not None and rx_z is not None and np.size(rx_x):
+        rec_step = max(1, int(np.ceil(np.size(rx_x) / 5000)))
+        h = ax.scatter(
+            np.asarray(rx_x)[::rec_step],
+            np.asarray(rx_z)[::rec_step],
+            c="white",
+            s=8,
+            edgecolors="k",
+            linewidths=0.3,
+            label="Receivers",
+            zorder=2,
+        )
+        handles.append(h)
+    if legend and handles:
+        ax.legend(handles=handles, loc="upper right", framealpha=0.85, fontsize=8)
+    return handles
 
 
 def _mid_index(values: np.ndarray) -> int:
@@ -173,25 +202,8 @@ def save_resistivity_survey_figure(
     vmin, vmax = _rho_limits(rho)
     fig, ax = _fig_axes(1, 1, (8.4, 4.6))
     _heatmap(ax, x, z, rho, vmin=vmin, vmax=vmax, cmap="jet", title=title)
-    handles = []
-    if tx_x is not None and tx_z is not None and np.size(tx_x):
-        h = ax.scatter(tx_x, tx_z, c="red", marker="x", s=36, linewidths=1.2, label="Sources", zorder=3)
-        handles.append(h)
-    if rx_x is not None and rx_z is not None and np.size(rx_x):
-        rec_step = max(1, int(np.ceil(np.size(rx_x) / 5000)))
-        h = ax.scatter(
-            np.asarray(rx_x)[::rec_step],
-            np.asarray(rx_z)[::rec_step],
-            c="white",
-            s=8,
-            edgecolors="k",
-            linewidths=0.3,
-            label="Receivers",
-            zorder=2,
-        )
-        handles.append(h)
-    if handles:
-        ax.legend(loc="upper right", framealpha=0.85, fontsize=8)
+    _scatter_survey(ax, tx_x, tx_z, rx_x, rx_z, legend=True)
+    _depth_down(ax)
     return _save(fig, path)
 
 
@@ -404,11 +416,18 @@ def save_2d_model_compare_figure(
     path: Path,
     *,
     inv_label: str = "Inverted",
+    tx_x=None,
+    tx_z=None,
+    rx_x=None,
+    rx_z=None,
 ) -> Path:
     vmin, vmax = _rho_limits(rho_true, rho_inv)
     fig, axes = _fig_axes(1, 2, (9.6, 4.2), sharey=True)
     im0 = _heatmap(axes[0], x_true, z_true, rho_true, vmin=vmin, vmax=vmax, cmap="viridis", title="True model", colorbar=False)
     _heatmap(axes[1], x_inv, z_inv, rho_inv, vmin=vmin, vmax=vmax, cmap="viridis", title=inv_label, colorbar=False)
+    _scatter_survey(axes[0], tx_x, tx_z, rx_x, rx_z, legend=True)
+    _scatter_survey(axes[1], tx_x, tx_z, rx_x, rx_z, legend=False)
+    _depth_down(axes[0])
     fig.colorbar(im0, ax=axes, shrink=0.82, pad=0.02, label="Ohm-m")
     fig.suptitle("2D resistivity: true vs inverted", fontsize=11)
     return _save(fig, path)
@@ -567,6 +586,10 @@ def save_1d_section_figure(
     true_x=None,
     true_z=None,
     true_rho=None,
+    tx_x=None,
+    tx_z=None,
+    rx_x=None,
+    rx_z=None,
 ) -> Path:
     panels = [("1D mean", sec_x, sec_z, sec_rho, "viridis", "Ohm-m")]
     if sec_std is not None:
@@ -598,6 +621,13 @@ def save_1d_section_figure(
             viridis_ims.append(im)
             if ax is not axes[0]:
                 ax.set_ylabel("")
+    _depth_down(axes[0])
+    legend_done = False
+    for ax, (_, _, _, _, cmap, _) in zip(axes, panels):
+        if cmap == "hot":
+            continue
+        _scatter_survey(ax, tx_x, tx_z, rx_x, rx_z, legend=not legend_done)
+        legend_done = True
     if viridis_ims:
         fig.colorbar(viridis_ims[-1], ax=[ax for ax, p in zip(axes, panels) if p[4] == "viridis"], shrink=0.82, pad=0.02, label="Ohm-m")
     if std_im is not None:
