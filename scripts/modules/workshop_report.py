@@ -21,13 +21,16 @@ from scripts.modules.fd_visualization import (
 from scripts.modules.report_figures import (
     save_1d_chi2_figure,
     save_1d_obs_pred_figure,
+    save_1d_obs_pred_vs_tx_figure,
     save_1d_rho_vs_depth_figure,
     save_1d_section_figure,
     save_2d_model_compare_figure,
     save_2d_slices_figure,
     save_amp_phase_vs_rx_figure,
+    save_amp_phase_vs_tx_figure,
     save_calibration_c_figure,
     save_obs_vs_syn_figure,
+    save_obs_vs_syn_vs_tx_figure,
     save_resistivity_survey_figure,
     save_wavelet_figure,
     survey_positions_from_meta,
@@ -36,7 +39,26 @@ from scripts.modules.rss_model import resistivity_from_sg_rss
 from scripts.modules.setup_defaults import load_setup_metadata, setup_metadata_path
 from scripts.modules.workshop_config import WorkshopConfig, load_config
 
+_TABSPEC = (
+    r">{\raggedright\arraybackslash}p{0.32\textwidth}"
+    r">{\raggedright\arraybackslash}p{0.60\textwidth}"
+)
 RUN_DIR_PATTERN = re.compile(r"^Run(\d+)$")
+
+
+def _display_path(path: Any, root: Path | None = None) -> Optional[str]:
+    if path is None:
+        return None
+    p = Path(path)
+    if root is not None:
+        try:
+            return str(p.resolve().relative_to(Path(root).resolve()))
+        except Exception:
+            pass
+    text = str(p)
+    if len(text) > 84:
+        return text[:40] + "..." + text[-40:]
+    return text
 SG_UP_RE = re.compile(r"sg_up\.rss-(\d+)$")
 HX_MOD_RE = re.compile(r"data_Hx_mod\.rss-(\d+)$")
 HX_ALT_RE = re.compile(r"data_mod_HX\.rss-(\d+)$")
@@ -122,6 +144,10 @@ def latex_escape(value: Any) -> str:
     text = text.encode("ascii", "replace").decode("ascii")
     for src, dst in _LATEX_ESCAPE:
         text = text.replace(src, dst)
+    # p{} table cells do not break at "/" or "\_" otherwise, so long paths
+    # overflow the page (Overfull \hbox).
+    text = text.replace("/", r"/\allowbreak{}")
+    text = text.replace(r"\_", r"\_\allowbreak{}")
     return text
 
 
@@ -243,7 +269,7 @@ def _kv_table(rows: Sequence[tuple[str, Any]], caption: Optional[str] = None) ->
     env = "longtable" if len(rows) > 18 else "tabular"
     bits = []
     if env == "longtable":
-        bits.append(r"\begin{longtable}{ll}")
+        bits.append(rf"\begin{{longtable}}{{{_TABSPEC}}}")
         bits.append(r"\toprule")
         bits.append(r"Parameter & Value \\")
         bits.append(r"\midrule")
@@ -259,7 +285,7 @@ def _kv_table(rows: Sequence[tuple[str, Any]], caption: Optional[str] = None) ->
         bits.append(r"\end{longtable}")
     else:
         bits.append(r"\begin{center}")
-        bits.append(r"\begin{tabular}{ll}")
+        bits.append(rf"\begin{{tabular}}{{{_TABSPEC}}}")
         bits.append(r"\toprule")
         bits.append(r"Parameter & Value \\")
         bits.append(r"\midrule")
@@ -275,7 +301,7 @@ def _figure_block(rel_name: str, caption: str) -> str:
         [
             r"\begin{figure}[htbp]",
             r"\centering",
-            rf"\includegraphics[width=0.95\textwidth]{{{rel_name}}}",
+            rf"\includegraphics[width=0.95\textwidth,height=0.82\textheight,keepaspectratio]{{{rel_name}}}",
             rf"\caption{{{latex_escape(caption)}}}",
             r"\end{figure}",
         ]
@@ -440,7 +466,7 @@ def collect_fw_rows(ctx: ReportContext) -> list[tuple[str, list[tuple[str, Any]]
                 ("Forward cfg", meta.get("forward_cfg")),
                 ("Data dimension", meta.get("forward_data_dim")),
                 ("ny samples", meta.get("ny_samples")),
-                ("SEG-Y template", meta.get("segy_template_path")),
+                ("SEG-Y template", _display_path(meta.get("segy_template_path"), ctx.root)),
             ],
         ),
     ]
@@ -515,7 +541,7 @@ def collect_1d_inv_rows(summary: Mapping, run_meta: Mapping) -> list[tuple[str, 
     cal = summary.get("calibration") or {}
     cfg = (run_meta or {}).get("config") or {}
     return [
-        ("Run directory", summary.get("run_dir")),
+        ("Run directory", Path(str(summary.get("run_dir", ""))).name or summary.get("run_dir")),
         ("Timestamp", summary.get("timestamp")),
         ("Transmitters", summary.get("n_tx")),
         ("Tx ids", summary.get("tx_ids")),
@@ -584,7 +610,15 @@ def write_fw_figures(ctx: ReportContext) -> None:
         wav = load_rss_traces(wav_path)
         w = np.asarray(wav["data"], dtype=float)[:, 0]
         t = np.arange(w.size, dtype=float) * float(wav["dt"])
-        _try_figure(ctx, "fw_wavelet", save_wavelet_figure, t, w, ctx.figures_dir / "fw_wavelet.pdf")
+        _try_figure(
+            ctx,
+            "fw_wavelet",
+            save_wavelet_figure,
+            t,
+            w,
+            ctx.figures_dir / "fw_wavelet.pdf",
+            flist_hz=ctx.setup_meta.get("flist_hz") or ctx.setup_meta.get("freqs_hz"),
+        )
     else:
         ctx.notes.append(f"Wavelet figure skipped: {wav_name} not found.")
 
@@ -602,6 +636,13 @@ def write_modelled_data_figures(ctx: ReportContext) -> None:
         save_amp_phase_vs_rx_figure,
         gains,
         ctx.figures_dir / "fw_amp_phase.pdf",
+    )
+    _try_figure(
+        ctx,
+        "fw_amp_phase_vs_tx",
+        save_amp_phase_vs_tx_figure,
+        gains,
+        ctx.figures_dir / "fw_amp_phase_vs_tx.pdf",
     )
     cal_rows, cal = collect_calibration_rows(ctx.setup_meta)
     if cal is None:
@@ -704,6 +745,14 @@ def write_2d_figures(ctx: ReportContext) -> None:
         obs,
         syn,
         ctx.figures_dir / "inv2d_data.pdf",
+    )
+    _try_figure(
+        ctx,
+        "inv2d_data_vs_tx",
+        save_obs_vs_syn_vs_tx_figure,
+        obs,
+        syn,
+        ctx.figures_dir / "inv2d_data_vs_tx.pdf",
     )
 
 
@@ -833,6 +882,15 @@ def write_1d_figures(ctx: ReportContext, data: Mapping, summary: Mapping) -> Non
                 rx=rx,
                 c_per_freq=_complex_c_from_meta(ctx.setup_meta),
             )
+            _try_figure(
+                ctx,
+                "inv1d_data_vs_tx",
+                save_1d_obs_pred_vs_tx_figure,
+                data,
+                ctx.figures_dir / "inv1d_data_vs_tx.pdf",
+                freqs=freqs,
+                c_per_freq=_complex_c_from_meta(ctx.setup_meta),
+            )
         else:
             ctx.notes.append("1D observed-vs-predicted figure skipped: missing gain arrays in NPZ.")
     if "chi2" in data or "misfit" in data:
@@ -875,7 +933,9 @@ def render_tex(ctx: ReportContext) -> str:
         r"\usepackage{booktabs}",
         r"\usepackage{parskip}",
         r"\usepackage{graphicx}",
+        r"\usepackage{flafter}",
         r"\usepackage{longtable}",
+        r"\usepackage{array}",
         r"\graphicspath{{figures/}}",
         r"\title{EM Inversion Workshop\\Workflow Report}",
         r"\author{}",
@@ -894,9 +954,9 @@ def render_tex(ctx: ReportContext) -> str:
                 ("Workshop root", ctx.root),
                 ("Generated", ctx.timestamp),
                 ("Included", included_txt),
-                ("setup_metadata.json", ctx.setup_meta_path),
-                ("2D run", ctx.run_2d),
-                ("1D run", ctx.run_1d),
+                ("setup_metadata.json", _display_path(ctx.setup_meta_path, ctx.root)),
+                ("2D run", None if ctx.run_2d is None else ctx.run_2d.name),
+                ("1D run", None if ctx.run_1d is None else ctx.run_1d.name),
             ]
         ),
         "",
@@ -918,7 +978,13 @@ def render_tex(ctx: ReportContext) -> str:
         "fw_amp_phase",
         "Steady-state channel-gain amplitude and phase versus local receiver index for a mid-line transmitter. Colours are frequencies.",
     )
-    lines.append(block or _note_block("Modelled amp/phase figure not available."))
+    lines.append(block or _note_block("Modelled amp/phase vs-rx figure not available."))
+    block = _include_fig(
+        ctx,
+        "fw_amp_phase_vs_tx",
+        "Steady-state channel-gain amplitude and phase versus transmitter index, with amplitude and phase rows for each receiver. Colours are frequencies.",
+    )
+    lines.append(block or _note_block("Modelled amp/phase vs-Tx figure not available."))
     cal_rows, cal = collect_calibration_rows(ctx.setup_meta)
     if cal:
         lines.append(r"\subsection{FDTD--analytic calibration}")
@@ -946,9 +1012,15 @@ def render_tex(ctx: ReportContext) -> str:
         block = _include_fig(
             ctx,
             "inv2d_data",
-            "Observed versus already-generated synthetic Hx/Hz channel gains for a mid-line transmitter.",
+            "Observed versus already-generated synthetic Hx/Hz channel gains versus receiver index for a mid-line transmitter.",
         )
         lines.append(block or _note_block("No synthetic Hx/Hz pair was found in the 2D run directory, so the data comparison was omitted."))
+        block = _include_fig(
+            ctx,
+            "inv2d_data_vs_tx",
+            "Observed versus synthetic Hx/Hz channel gains versus transmitter index, with amplitude and phase rows for each receiver.",
+        )
+        lines.append(block or "")
     else:
         lines.append(r"\section{2D inversion}")
         lines.append(_note_block("No 2D inversion run was included."))
@@ -975,9 +1047,15 @@ def render_tex(ctx: ReportContext) -> str:
         block = _include_fig(
             ctx,
             "inv1d_data",
-            "Observed FDTD channel gains versus analytic predictions of the inverted 1D model (C(f) applied when stored).",
+            "Observed FDTD channel gains versus analytic predictions of the inverted 1D model, versus receiver (C(f) applied when stored).",
         )
         lines.append(block or _note_block("1D observed-versus-predicted figure not available."))
+        block = _include_fig(
+            ctx,
+            "inv1d_data_vs_tx",
+            "Observed versus predicted 1D channel gains versus transmitter, with amplitude and phase rows for each receiver.",
+        )
+        lines.append(block or "")
         block = _include_fig(ctx, "inv1d_chi2", "Per-transmitter chi-squared and misfit.")
         lines.append(block or "")
     else:
