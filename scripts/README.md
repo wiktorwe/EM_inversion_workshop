@@ -21,6 +21,13 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   hardcoding frequencies.
 - `run_report.py`: build/write per-run `analytic_1d_inversion_summary.json` and
   human-readable `REPORT.md` for Step 05; HTML panel helper for Step 06.
+- `rss_model.py`: read 2D RSS conductivity models as ``(x, z, grid)`` using the
+  same axis convention as notebooks 04/06.
+- `report_figures.py`: matplotlib PDF writers used by the workflow report
+  (forward model, wavelet, modelled amp/phase, calibration, 2D/1D results).
+- `workshop_report.py`: discover workspace artifacts, collect settings tables,
+  write `workspace/report/workflow_report.tex`. Invoked by
+  `scripts/make_workshop_report.py`.
 - `rockem_bridge.py`: locates the validated `rockem-suite` checkout (default
   `~/software/new_rockem/rockem-suite`, override via `ROCKEM_SUITE_ROOT`), puts
   its `python/` package and the validation examples' `shared/` directory on
@@ -93,6 +100,21 @@ Other utilities:
 - `../clean.sh` / `clean_workspace.py`: remove the entire `workspace/` tree and
   restore a pristine checkout. Prints an explicit warning that setup metadata,
   calibration, and 1D `REPORT.md` files are deleted.
+- `make_workshop_report.py`: write a LaTeX snapshot of the current workspace
+  (`workspace/report/workflow_report.tex` plus PDF figures under
+  `workspace/report/figures/`). Requires Step 01 `setup_metadata.json`. 2D and
+  1D inversion sections are included only when a `Run{N}` directory exists
+  (latest by default). From the workshop root:
+
+  ```bash
+  python scripts/make_workshop_report.py
+  python scripts/make_workshop_report.py --compile
+  python scripts/make_workshop_report.py --2d-run Run1 --1d-run Run0
+  python scripts/make_workshop_report.py --no-2d --no-1d
+  ```
+
+  The script does not re-run modelling or inversion. `--compile` runs
+  `pdflatex` if it is on PATH. `./clean.sh` removes the report with `workspace/`.
 - `validate_notebooks.py`: smoke-test each notebook's setup cell (`python scripts/validate_notebooks.py --expect-rockem-missing` if rockem-suite is not configured yet).
 - `normalize_notebooks.py`: add nbformat cell ids to all workshop notebooks (run after editing `.ipynb` files).
 - `../jupyter_config/jupyter_server_config.py`: Voila websocket settings used by `start_*.sh`.

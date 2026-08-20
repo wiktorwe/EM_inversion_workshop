@@ -11,9 +11,12 @@ __all__ = [
     "fd",
     "fd_visualization",
     "inversion",
+    "report_figures",
     "rockem_bridge",
+    "rss_model",
     "segy",
     "source",
     "survey",
     "workshop_config",
+    "workshop_report",
 ]
