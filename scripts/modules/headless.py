@@ -581,9 +581,129 @@ def load_manifest(out_root: Path | str) -> dict:
     return json.loads((Path(out_root) / "manifest.json").read_text())
 
 
+# ---------------------------------------------------------------------------
+# The full acquisition matrix: N frequencies x M source components
+# ---------------------------------------------------------------------------
+#
+# Task 2 splits the band into independent per-frequency runs; Task 5 adds Kz
+# alongside Kx. Together they define the workshop's actual target acquisition:
+# one FDTD run per (frequency, source component) pair. With the shipped
+# defaults that is 4 x 2 = 8 runs, and it is what produces the complete 2x2
+# magnetic coupling matrix at every frequency:
+#
+#     Kx source -> Hx, Hz     (Cxx, Cxz)
+#     Kz source -> Hx, Hz     (Czx, Czz)
+#
+# Both receiver components are recorded by every run already (mod.cfg sets
+# Hxrecord and Hzrecord true), so the ONLY thing that needs to vary between
+# runs is source_type - and the frequency-dependent grid, if the band is split.
+#
+# BACKWARD COMPATIBILITY. `split_by_frequency=False` with a single source
+# reproduces the historical layout exactly: one dataset written directly into
+# `out_root`, with `setup_metadata.json` where every existing notebook expects
+# it. That is the A/B path Task 2 asks to keep. Any other combination writes
+# one SUBDIRECTORY per dataset plus a `manifest.json`, because there is then no
+# single dataset that could honestly be called "the" one.
+
+
+def dataset_name(freq_hz: Optional[float], source_field: str) -> str:
+    """Directory name for one (frequency, source) dataset."""
+    src = str(source_field).lower()
+    return f"{'broadband' if freq_hz is None else f'f{freq_hz:.0f}Hz'}_{src}"
+
+
+def build_forward_matrix(
+    out_root: Path | str,
+    p: SetupParams,
+    *,
+    split_by_frequency: bool = True,
+    source_fields: Sequence[str] = ("HX", "HZ"),
+    verbose: bool = True,
+) -> dict:
+    """Build every (frequency, source) forward dataset and a manifest.
+
+    Returns the manifest. When the result is a single dataset in the historical
+    layout, ``manifest["single_dataset"]`` is True and ``out_root`` itself is
+    that dataset's directory.
+    """
+    out_root = Path(out_root)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    sources = [str(s).upper() for s in source_fields]
+    for s in sources:
+        if s not in SOURCE_TYPE_CODES:
+            raise ValueError(f"source_field must be one of {sorted(SOURCE_TYPE_CODES)}, got {s!r}")
+    if not sources:
+        raise ValueError("At least one source component must be selected.")
+
+    freqs: list[Optional[float]] = (
+        [float(f) for f in p.flist_hz] if split_by_frequency else [None]
+    )
+    single = (len(freqs) == 1 and freqs[0] is None and len(sources) == 1)
+
+    runs: dict[str, dict] = {}
+    for f in freqs:
+        for src in sources:
+            sub = replace(p, source_field=src)
+            if f is not None:
+                sub = replace(sub, flist_hz=(f,), f_min_hz=f, f_max_hz=f)
+            name = dataset_name(f, src)
+            run_dir = out_root if single else out_root / name
+            runs[name] = {
+                "run_dir": str(run_dir),
+                "freq_hz": f,
+                "source_field": src,
+                "meta": build_forward_inputs(run_dir, sub, verbose=verbose),
+            }
+
+    manifest = {
+        "mode": ("single" if single else
+                 ("per_frequency_per_source" if split_by_frequency else "per_source")),
+        "single_dataset": single,
+        "split_by_frequency": bool(split_by_frequency),
+        "source_fields": sources,
+        "flist_hz": [float(v) for v in p.flist_hz],
+        "n_datasets": len(runs),
+        "runs": runs,
+    }
+    (out_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    if verbose:
+        total_nt = sum(r["meta"]["nt_model"] for r in runs.values())
+        print(f"[matrix] {len(runs)} dataset(s) under {out_root} "
+              f"({len(freqs)} frequency group(s) x {len(sources)} source(s)); "
+              f"total nt across runs = {total_nt:,}"
+              + ("  [historical single-dataset layout]" if single else ""))
+    return manifest
+
+
+def iter_datasets(out_root: Path | str) -> list[dict]:
+    """Every dataset in ``out_root``, from its manifest.
+
+    Falls back to treating ``out_root`` itself as one dataset when no manifest
+    exists, so a workspace produced before the matrix was introduced still
+    reads correctly.
+    """
+    out_root = Path(out_root)
+    mpath = out_root / "manifest.json"
+    if mpath.exists():
+        man = json.loads(mpath.read_text())
+        return [dict(v, name=k) for k, v in man["runs"].items()]
+    if (out_root / "setup_metadata.json").exists():
+        meta = json.loads((out_root / "setup_metadata.json").read_text())
+        return [{
+            "name": dataset_name(None, meta.get("source_field", "HX")),
+            "run_dir": str(out_root), "freq_hz": None,
+            "source_field": str(meta.get("source_field", "HX")).upper(), "meta": meta,
+        }]
+    return []
+
+
 __all__ = [
     "SOURCE_TYPE_CODES",
+    "build_forward_matrix",
     "build_per_frequency_forward_inputs",
+    "dataset_name",
+    "iter_datasets",
     "load_manifest",
     "SetupParams",
     "build_forward_inputs",

@@ -276,6 +276,33 @@ Two reasons this is worth the extra run:
    at which each observable leaves its background by more than the calibration
    scatter.
 
+### The acquisition matrix: one run per (frequency, source component)
+
+Step 01 builds a **matrix** of forward datasets, not a single run:
+
+- **sources** — a multi-select (Kx and/or Kz). Selecting both builds both
+  datasets and so completes the 2×2 magnetic coupling matrix.
+- **One run per frequency** — a checkbox, on by default. Spatial sampling is set
+  by the *highest* frequency and record length by the *lowest*, so a single
+  broadband run applies the fine grid of the top tone through the long record of
+  the bottom one. Measured on this survey: **312.1 s split against 621.9 s
+  broadband** — 1.99× serially, up to 5.84× if the runs go concurrently.
+
+With the shipped defaults that is 4 frequencies × 2 sources = **8 datasets**,
+written as subdirectories of `workspace/2D/forward/` with a `manifest.json`
+listing them. Step 02 gains a **dataset** dropdown (everything in that notebook
+acts on the selected one) and a **Run modelling for ALL datasets** button.
+
+The historical layout is preserved exactly: one broadband run with a single
+source still writes straight into `workspace/2D/forward/` with
+`setup_metadata.json` where it has always been, so the change can be A/B tested
+and older workspaces keep loading.
+
+Steps 04/05/06 still consume **one** dataset at a time — select it in Step 02.
+Inverting the full tensor jointly is a separate matter: `mpiEminvTE2d` applies a
+single `source_type` to every shot in a run, so joint multi-source FWI needs
+that value to become per-shot upstream in rockem-suite.
+
 ### Extraction window must exclude the source ramp-up
 
 `n_periods_extract` in `setup_metadata.json` is **not** the wavelet's own

@@ -620,6 +620,25 @@ Per transmitter the ordering does not reverse over the fault (tx 16-18): every
 strategy does BETTER there (model error 0.51-0.72) than away from it
 (0.78-0.80), and `single` is best or tied nearly everywhere.
 
+### A tolerance that made the check useless in both directions
+
+`check_kx_convergence`'s inherited `rel_tol = 1e-4` suited the OLD n_nodes-only
+test, whose leg returns ~1e-10 - so it passed unconditionally and told you
+nothing. Carrying that tolerance over to the new lam_max leg, which legitimately
+sits near 1e-3 (measured 1.4e-3 over this workshop's prior at the shipped
+quadrature policy), made it FAIL unconditionally instead. Same uselessness, other
+direction, and it is what a user hit: the panel always said "NOT CONVERGED".
+
+`rel_tol` is now anchored to the workshop's own uncertainty floor - a tenth of
+`VALIDATED_REL_ERROR_FLOOR` (3 %), i.e. 0.3 % - and the verdict has three levels
+rather than two, so "inside the noise floor but not negligible" is visible
+instead of being rounded to pass or fail. The shipped configuration reports
+`converged` with real margin (1.4e-3 against a 3e-3 tolerance), and a prior wide
+enough to matter still trips it.
+
+The lesson generalises: a pass/fail threshold inherited from a different test is
+worse than no threshold, because it looks like a measurement.
+
 ### Recommendation
 
 Do not adopt a strictly sequential ladder. If the ladder is wanted for cost, use
