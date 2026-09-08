@@ -256,6 +256,7 @@ def stage_regularisation(freq_hz: float, f_max_hz: float, alpha_final: float,
 class Stage:
     index: int
     freq_hz: float
+    source_field: str
     forward_dir: Path
     run_dir: Path
     dx_m: float
@@ -283,6 +284,7 @@ def build_ladder(
     knot_exponent: float = 0.5,
     reg_exponent: float = 1.0,
     joint_final_stage: bool = True,
+    source_fields: Sequence[str] = ("HX",),
 ) -> list[Stage]:
     """Stages, lowest frequency first, plus an optional final joint stage.
 
@@ -297,37 +299,76 @@ def build_ladder(
     model), followed by ONE final joint stage on the finest grid using all
     frequencies together, starting from the ladder's output - so the final model
     actually fits every frequency rather than only the last one.
+
+    MULTI-SOURCE, and what it can and cannot be with this engine.
+    `source_fields` cascades over source components INSIDE each frequency:
+    stage order is (f0,Kx), (f0,Kz), (f1,Kx), (f1,Kz), ... each starting from the
+    previous stage's model. Every dataset is therefore used, and the final model
+    has seen all of them.
+
+    That is a CASCADE, not a joint inversion, and the difference is real: a
+    joint inversion sums the Kx and Kz gradients before stepping, so both
+    constrain the same update; a cascade fits one source, then moves to the
+    next, so the last source in each frequency has the final say.
+
+    The reason it is a cascade is an engine constraint, not a choice.
+    `mpiEminvTE2d` parses `source_type` as a single int and stores it as one
+    scalar on InversionEmTE2D; the switch that applies it
+    (lib/inversion/inversionEmTE2D.cpp) already sits INSIDE the per-shot loop,
+    but reads that global value, so every shot in a run gets the same source
+    type. A true joint multi-source inversion needs that value to become
+    per-shot - a small, well-localised change, but an UPSTREAM one in
+    rockem-suite, not something to bodge in the workshop.
     """
     ladder_root = Path(ladder_root)
-    runs = sorted(per_frequency_manifest["runs"].values(), key=lambda r: r["freq_hz"])
-    f_max = max(r["freq_hz"] for r in runs)
+    runs = [r for r in per_frequency_manifest["runs"].values() if r.get("freq_hz") is not None]
+    if not runs:
+        raise ValueError(
+            "The manifest contains no per-frequency datasets. Build them with "
+            "build_forward_matrix(..., split_by_frequency=True) - a broadband "
+            "manifest cannot drive a frequency ladder."
+        )
+    sources = [str(s).upper() for s in (source_fields or ("HX",))]
+    by_freq: dict[float, dict[str, dict]] = {}
+    for r in runs:
+        by_freq.setdefault(float(r["freq_hz"]), {})[str(r.get("source_field", "HX")).upper()] = r
+    missing = {f: [s for s in sources if s not in d] for f, d in by_freq.items()}
+    missing = {f: m for f, m in missing.items() if m}
+    if missing:
+        raise ValueError(f"Manifest is missing source datasets: {missing}")
+
+    f_max = max(by_freq)
     stages: list[Stage] = []
-    for k, r in enumerate(runs):
-        f = float(r["freq_hz"])
-        meta = r["meta"]
-        stages.append(Stage(
-            index=k, freq_hz=f, forward_dir=Path(r["run_dir"]),
-            run_dir=ladder_root / f"stage{k}_f{f:.0f}Hz",
-            dx_m=float(meta["dx_model_target_m"]),
-            dtx_m=stage_knot_spacing(f, f_max, dt_final_m, knot_exponent),
-            dtz_m=stage_knot_spacing(f, f_max, dt_final_m, knot_exponent),
-            tik_sgregalpha=stage_regularisation(f, f_max, alpha_final, reg_exponent),
-            tv_sgregalpha=0.0,
-            max_iterations=max_iterations,
-            apertx_m=float(meta["apertx_m"]),
-        ))
+    k = 0
+    for f in sorted(by_freq):                      # lowest frequency first
+        for src in sources:                        # then cascade over sources
+            r = by_freq[f][src]
+            meta = r["meta"]
+            stages.append(Stage(
+                index=k, freq_hz=f, source_field=src, forward_dir=Path(r["run_dir"]),
+                run_dir=ladder_root / f"stage{k}_f{f:.0f}Hz_{src.lower()}",
+                dx_m=float(meta["dx_model_target_m"]),
+                dtx_m=stage_knot_spacing(f, f_max, dt_final_m, knot_exponent),
+                dtz_m=stage_knot_spacing(f, f_max, dt_final_m, knot_exponent),
+                tik_sgregalpha=stage_regularisation(f, f_max, alpha_final, reg_exponent),
+                tv_sgregalpha=0.0,
+                max_iterations=max_iterations,
+                apertx_m=float(meta["apertx_m"]),
+            ))
+            k += 1
     if joint_final_stage:
-        r = runs[-1]
-        meta = r["meta"]
-        stages.append(Stage(
-            index=len(stages), freq_hz=float(r["freq_hz"]),
-            forward_dir=Path(r["run_dir"]),
-            run_dir=ladder_root / "stage_joint",
-            dx_m=float(meta["dx_model_target_m"]),
-            dtx_m=dt_final_m, dtz_m=dt_final_m,
-            tik_sgregalpha=float(alpha_final), tv_sgregalpha=0.0,
-            max_iterations=max_iterations, apertx_m=float(meta["apertx_m"]),
-        ))
+        for src in sources:
+            r = by_freq[f_max][src]
+            meta = r["meta"]
+            stages.append(Stage(
+                index=len(stages), freq_hz=f_max, source_field=src,
+                forward_dir=Path(r["run_dir"]),
+                run_dir=ladder_root / f"stage_joint_{src.lower()}",
+                dx_m=float(meta["dx_model_target_m"]),
+                dtx_m=dt_final_m, dtz_m=dt_final_m,
+                tik_sgregalpha=float(alpha_final), tv_sgregalpha=0.0,
+                max_iterations=max_iterations, apertx_m=float(meta["apertx_m"]),
+            ))
     return stages
 
 

@@ -290,12 +290,19 @@ def prepare_inversion_inputs(
             ep_max=ep_max,
         )
     mod_cfg_values = read_cfg_values(Path(fdmodel_dir) / "mod.cfg")
-    # Pin order/lpml/PML params to the exact forward-run values - a mismatch
-    # here (e.g. inv.cfg's own template lpml drifting from mod.cfg's) would
-    # make the FWI's re-modelled wavefield subtly inconsistent with the
+    # Pin order/lpml/PML/source_type to the exact forward-run values - a
+    # mismatch here (e.g. inv.cfg's own template lpml drifting from mod.cfg's)
+    # would make the FWI's re-modelled wavefield subtly inconsistent with the
     # forward data it's fitting, independent of any real model update.
+    #
+    # source_type belongs in this list and was missing from it. inv.cfg's
+    # template says source_type = "3" (Kx); a Kz forward run writes
+    # source_type = "5" into its mod.cfg, and without pinning it the inversion
+    # would inject a Kx source while fitting Kz data - a silent, physically
+    # wrong gradient rather than an error. It only became reachable once the
+    # workshop could produce Kz datasets at all.
     pml_updates = {}
-    for key in ("pml_kmax", "pml_smax", "pml_amax", "order", "lpml"):
+    for key in ("pml_kmax", "pml_smax", "pml_amax", "order", "lpml", "source_type"):
         value = mod_cfg_values.get(key)
         if value is not None:
             pml_updates[key] = value

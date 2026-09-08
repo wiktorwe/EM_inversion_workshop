@@ -138,6 +138,11 @@ def main() -> int:
     ap.add_argument("--initial-rho", type=float, default=10.0)
     ap.add_argument("--nproc", type=int, default=6)
     ap.add_argument("--no-joint", action="store_true")
+    ap.add_argument("--sources", nargs="+", default=["HX"],
+                    help="source components to cascade within each frequency stage "
+                         "(e.g. --sources HX HZ). See build_ladder's docstring: this is a "
+                         "CASCADE, not a joint inversion - the engine takes one source_type "
+                         "per run.")
     ap.add_argument("--out", default="workspace/2D/inversion/multiscale_2d.json")
     args = ap.parse_args()
 
@@ -145,17 +150,24 @@ def main() -> int:
     manifest = json.loads((root / "manifest.json").read_text())
     stages = build_ladder(manifest, args.ladder_root, alpha_final=args.alpha_final,
                           max_iterations=args.max_iterations,
-                          joint_final_stage=not args.no_joint)
+                          joint_final_stage=not args.no_joint,
+                          source_fields=tuple(s.upper() for s in args.sources))
     out: dict = {}
     outp = Path(args.out); outp.parent.mkdir(parents=True, exist_ok=True)
     if outp.exists():
         out = json.loads(outp.read_text())
 
     print("=== ladder ===")
-    print(f"{'stage':>12} {'f [Hz]':>8} {'dx m':>6} {'dtx m':>7} {'tik':>9} {'apertx m':>9}")
+    print(f"{'stage':>24} {'f [Hz]':>8} {'src':>4} {'dx m':>6} {'dtx m':>7} "
+          f"{'tik':>9} {'apertx m':>9}")
     for s in stages:
-        print(f"{s.run_dir.name:>12} {s.freq_hz:8.0f} {s.dx_m:6.2f} {s.dtx_m:7.2f} "
-              f"{s.tik_sgregalpha:9.4g} {s.apertx_m:9.2f}")
+        print(f"{s.run_dir.name:>24} {s.freq_hz:8.0f} {s.source_field:>4} {s.dx_m:6.2f} "
+              f"{s.dtx_m:7.2f} {s.tik_sgregalpha:9.4g} {s.apertx_m:9.2f}")
+    if len(set(s.source_field for s in stages)) > 1:
+        print("\n  NOTE: multiple source components cascade within each frequency - each")
+        print("  stage starts from the previous stage's model. That is NOT a joint")
+        print("  inversion: mpiEminvTE2d applies one source_type to every shot in a run,")
+        print("  so the gradients are not summed. See multiscale_2d.build_ladder.")
 
     if "verify" in args.stage:
         coarse = Path(stages[0].forward_dir) / "sg.rss"
