@@ -19,6 +19,11 @@ import numpy as np
 
 from scripts.modules.analytic_1d_forward import ForwardRejected, forward_1d_gains
 
+# Finite sentinel for a model the analytic solver refuses. It must be finite:
+# a NaN or inf would make `differential_evolution` and the L-curve geometry
+# undefined rather than merely bad.
+_REJECT_COST = 1e12
+
 
 def unpack_model_params(params, n_layers, z_start_rel, z_end_rel, snap_dz=None,
                         snap_origin_rel=0.0):
@@ -138,7 +143,7 @@ def complex_gain_objective(
             params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
             freq_mask=freq_mask, snap_dz=snap_dz)
     except ForwardRejected:
-        return 1e12
+        return _REJECT_COST
 
     obs_hx = np.asarray(tx_entry["obs_hx_gain"], dtype=complex)
     obs_hz = np.asarray(tx_entry["obs_hz_gain"], dtype=complex)
@@ -158,7 +163,7 @@ def complex_gain_objective(
 
     m1, m2 = np.isfinite(res_x), np.isfinite(res_z)
     if not np.any(m1) and not np.any(m2):
-        return 1e12
+        return _REJECT_COST
 
     mis = 0.0
     if np.any(m1):
@@ -230,10 +235,17 @@ def forward_tensor_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, ep
     return out
 
 
-def tensor_objective(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
-                     reg_lambda, cal, components=DEFAULT_COMPONENTS, weights=None,
-                     freq_mask=None, snap_dz=None):
-    """Complex-gain misfit summed over the requested tensor components.
+def tensor_objective_parts(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
+                           reg_lambda, cal, components=DEFAULT_COMPONENTS, weights=None,
+                           freq_mask=None, snap_dz=None):
+    """`(data_misfit, reg_norm, total)` for the requested tensor components.
+
+    THE one implementation. `tensor_objective` returns only `total` from it, and
+    `inversion_tuning.split_objective` returns all three - so the DE-budget and
+    lambda tuners decompose exactly the functional the run minimises. They used
+    to carry their own copy that was hardwired to the Kx pair, which meant that
+    with tensor components selected the tuners recommended a budget and a lambda
+    for a DIFFERENT objective than the one being optimised.
 
     `cal` carries the per-SOURCE calibration and the per-COMPONENT uncertainty:
 
@@ -251,7 +263,7 @@ def tensor_objective(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
                                      eps_r, components=components, freq_mask=freq_mask,
                                      snap_dz=snap_dz)
     except ForwardRejected:
-        return 1e12
+        return _REJECT_COST, 0.0, _REJECT_COST
 
     m = None if freq_mask is None else np.asarray(freq_mask, dtype=bool)
     weights = weights or {}
@@ -280,12 +292,24 @@ def tensor_objective(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
             np.nansum(np.where(good, np.abs(res) ** 2, np.nan))
         )
     if not any_finite:
-        return 1e12
+        return _REJECT_COST, 0.0, _REJECT_COST
 
-    if reg_lambda > 0.0 and n_layers > 1:
+    reg_norm = 0.0
+    if n_layers > 1:
         lrho = np.asarray(params[:n_layers], dtype=float)
-        mis += float(reg_lambda) * float(np.mean(np.diff(lrho) ** 2))
-    return mis
+        reg_norm = float(np.mean(np.diff(lrho) ** 2))
+    total = mis + (float(reg_lambda) * reg_norm if reg_lambda > 0.0 else 0.0)
+    return mis, reg_norm, total
+
+
+def tensor_objective(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
+                     reg_lambda, cal, components=DEFAULT_COMPONENTS, weights=None,
+                     freq_mask=None, snap_dz=None):
+    """Scalar misfit for the optimisers - `tensor_objective_parts`'s total."""
+    return tensor_objective_parts(
+        params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r, reg_lambda, cal,
+        components=components, weights=weights, freq_mask=freq_mask, snap_dz=snap_dz,
+    )[2]
 
 
 def n_tensor_data(tx_entry, components=DEFAULT_COMPONENTS, freq_mask=None):
@@ -298,69 +322,158 @@ def n_tensor_data(tx_entry, components=DEFAULT_COMPONENTS, freq_mask=None):
     return 2 * nfreq * nrx * len(present)      # complex -> 2 real numbers
 
 
+def _calibration_blocks(path, src):
+    """Every stored calibration block for one source in one metadata file."""
+    import json
+
+    meta = json.loads(Path(path).read_text())
+    block = (meta.get("fdtd_analytic_calibration_by_source") or {}).get(src)
+    if block is None:
+        active = meta.get("fdtd_analytic_calibration") or {}
+        if str(active.get("source_field", "HX")).upper() == src:
+            block = active
+    if block is None:
+        raise KeyError(
+            f"No calibration for source {src} in {path}. Run the Step 02 "
+            f"calibration with 'cal source' set to {src}."
+        )
+    return block
+
+
 def tensor_calibration(meta_paths):
     """Per-source C and per-component sigma, assembled from setup metadata.
 
     `meta_paths` maps a source component ("HX"/"HZ") to the
-    `setup_metadata.json` that holds its calibration. They may be the SAME file:
+    `setup_metadata.json` that holds its calibration - or to a SEQUENCE of them,
+    one per single-frequency dataset. They may be the SAME file:
     `save_calibration_to_metadata` stores every calibration it has ever run under
     `fdtd_analytic_calibration_by_source`, keyed by source, so one Kx dataset's
     metadata typically carries both.
+
+    Per-frequency datasets each carry their OWN calibration, fitted on their own
+    grid, and they genuinely differ - measured +2.04 % at 1 kHz against the
+    broadband value, against 0.39 % scatter, with a same-grid control
+    reproducing to 0.001 %. So they are assembled frequency by frequency rather
+    than averaged, and passing a list of per-frequency metadata files is the
+    supported way to invert a per-frequency acquisition matrix.
 
     sigma is resolved per COMPONENT, not per source or per band, because the
     residual scatter differs sharply between them - the cross terms are
     near-nulls (0.06 % on Hx-from-Kx against 2.6 % on Hz-from-Kx on this survey).
     """
-    import json
-
-    C, sigma, freqs, methods = {}, {}, None, {}
-    for src, path in meta_paths.items():
+    # freq -> source -> block, so both consistency checks below are per-frequency
+    by_freq = {}
+    for src, paths in meta_paths.items():
         src = str(src).upper()
-        meta = json.loads(Path(path).read_text())
-        block = (meta.get("fdtd_analytic_calibration_by_source") or {}).get(src)
-        if block is None:
-            active = meta.get("fdtd_analytic_calibration") or {}
-            if str(active.get("source_field", "HX")).upper() == src:
-                block = active
-        if block is None:
-            raise KeyError(
-                f"No calibration for source {src} in {path}. Run the Step 02 "
-                f"calibration with 'cal source' set to {src}."
-            )
-        methods[src] = (str(block.get("method", "?")), float(block.get("rho_ohm_m", float("nan"))))
-        C[src] = (np.asarray(block["C_hxhz_shared_real"], dtype=float)
-                  + 1j * np.asarray(block["C_hxhz_shared_imag"], dtype=float))
-        f = np.asarray(block["freqs_hz"], dtype=float)
-        if freqs is None:
-            freqs = f
-        elif not np.allclose(freqs, f):
+        if isinstance(paths, (str, Path)):
+            paths = [paths]
+        for path in paths:
+            block = _calibration_blocks(path, src)
+            freqs_b = np.asarray(block["freqs_hz"], dtype=float)
+            C_b = (np.asarray(block["C_hxhz_shared_real"], dtype=float)
+                   + 1j * np.asarray(block["C_hxhz_shared_imag"], dtype=float))
+            for i, f in enumerate(freqs_b):
+                slot = by_freq.setdefault(float(f), {})
+                if src in slot:
+                    raise ValueError(
+                        f"Source {src} has two calibrations for {f:g} Hz "
+                        f"(the second from {path}). Pass one metadata file per "
+                        f"frequency per source."
+                    )
+                slot[src] = {
+                    "C": complex(C_b[i]),
+                    "sigma_hx": float(np.asarray(block["sigma_hx"], dtype=float)[i]),
+                    "sigma_hz": float(np.asarray(block["sigma_hz"], dtype=float)[i]),
+                    "earth": (str(block.get("method", "?")),
+                              float(block.get("rho_ohm_m", float("nan")))),
+                    "path": str(path),
+                }
+
+    wanted = {str(s).upper() for s in meta_paths}
+    freqs = np.asarray(sorted(by_freq), dtype=float)
+    if freqs.size == 0:
+        raise ValueError("No calibrations found in the given metadata.")
+
+    for f in freqs:
+        slot = by_freq[float(f)]
+        missing = sorted(wanted - set(slot))
+        if missing:
             raise ValueError(
-                f"Calibrations disagree on frequencies: {freqs} vs {f}. Every "
-                "tensor component must be calibrated on the same band."
+                f"No calibration at {f:g} Hz for source(s) {missing}. Every tensor "
+                "component must be calibrated on the same band."
             )
-        for comp, (s_c, r_c) in TENSOR_COMPONENTS.items():
-            if s_c != src:
-                continue
-            sigma[comp] = np.asarray(
-                block["sigma_hx" if r_c == "HX" else "sigma_hz"], dtype=float
+        # Every component of one tensor must be calibrated on the SAME Earth
+        # model AT THAT FREQUENCY. `save_calibration_to_metadata` keeps the last
+        # calibration per source, so running (say) the lateral-average method for
+        # Kx and the homogeneous one for Kz leaves a metadata file that looks
+        # complete but mixes a 28 Ohm-m reference with a 1 Ohm-m one - different
+        # C AND different sigma scales, silently. Measured when this first
+        # happened: the Czz residual came out at 8 sigma while every other
+        # component sat under 0.2, purely because its sigma came from the wrong
+        # Earth.
+        #
+        # The comparison is deliberately WITHIN a frequency, not across the band.
+        # Per-frequency datasets legitimately differ in rho_ref (measured
+        # 26.09 / 27.60 / 29.04 / 29.85 Ohm-m at 1/2/4/6 kHz) because each
+        # frequency's grid resamples the same sg.rss differently. Comparing those
+        # across frequencies would reject a correct setup.
+        distinct = {slot[s]["earth"] for s in wanted}
+        if len(distinct) > 1:
+            detail = ", ".join(
+                f"{s}: {slot[s]['earth'][0]} (rho_ref={slot[s]['earth'][1]:.4g})"
+                for s in sorted(wanted)
             )
-    # Every component of one tensor must be calibrated on the SAME Earth model.
-    # `save_calibration_to_metadata` keeps the last calibration per source, so
-    # running (say) the lateral-average method for Kx and the homogeneous one for
-    # Kz leaves a metadata file that looks complete but mixes a 28 Ohm-m
-    # reference with a 1 Ohm-m one - different C AND different sigma scales,
-    # silently. Measured when this first happened: the Czz residual came out at
-    # 8 sigma while every other component sat under 0.2, purely because its sigma
-    # came from the wrong Earth.
-    distinct = set(methods.values())
-    if len(distinct) > 1:
-        detail = ", ".join(f"{s}: {m} (rho_ref={r:.4g})" for s, (m, r) in sorted(methods.items()))
-        raise ValueError(
-            "Tensor components are calibrated on DIFFERENT Earth models - "
-            f"{detail}. Re-run the Step 02 calibration with the same method for "
-            "every source component before inverting the tensor."
-        )
-    return {"C": C, "sigma": sigma, "freqs_hz": freqs, "method": next(iter(distinct))[0]}
+            raise ValueError(
+                f"At {f:g} Hz the tensor components are calibrated on DIFFERENT "
+                f"Earth models - {detail}. Re-run the Step 02 calibration with the "
+                "same method for every source component before inverting the tensor."
+            )
+
+    C = {s: np.asarray([by_freq[float(f)][s]["C"] for f in freqs], dtype=complex)
+         for s in wanted}
+    sigma = {}
+    for comp, (s_c, r_c) in TENSOR_COMPONENTS.items():
+        if s_c not in wanted:
+            continue
+        key = "sigma_hx" if r_c == "HX" else "sigma_hz"
+        sigma[comp] = np.asarray([by_freq[float(f)][s_c][key] for f in freqs], dtype=float)
+
+    method = by_freq[float(freqs[0])][sorted(wanted)[0]]["earth"][0]
+    return {"C": C, "sigma": sigma, "freqs_hz": freqs, "method": method}
+
+
+def component_weights(cfg):
+    """Per-component weights from the GUI's two knobs.
+
+    `w_hxh` and `w_hxhz` weight the Hx- and Hz-RECEIVER components, whichever
+    source they came from, so the two historical knobs keep their meaning as the
+    tensor grows: `w_hxh` -> Cxx and Czx, `w_hxhz` -> Cxz and Czz.
+    """
+    keys = {"HX": "w_hxh", "HZ": "w_hxhz"}
+    return {c: float(cfg.get(keys[recv], 1.0)) for c, (_src, recv) in TENSOR_COMPONENTS.items()}
+
+
+def resolve_tensor_calibration(cfg, setup_meta_path):
+    """Per-source C and per-component sigma for the components `cfg` selects.
+
+    A Kx-only selection reuses the flat active calibration
+    (`fdtd_analytic_calibration.calibration_for_inversion`) exactly as before, so
+    the historical two-component path is bit-for-bit unchanged. Anything
+    involving Kz is assembled from `fdtd_analytic_calibration_by_source`, where
+    Step 02 stores every calibration it has run.
+
+    This lived in notebook 05 and so was unreachable from `inversion_tuning`,
+    which is why the tuners kept their own Kx-only calibration handling and
+    tuned a different objective from the one the run minimised.
+    """
+    comps = tuple(cfg.get("components") or DEFAULT_COMPONENTS)
+    sources = sorted({TENSOR_COMPONENTS[c][0] for c in comps})
+    cal = cfg.get("calibration")
+    if sources == ["HX"] and cal is not None:
+        return {"C": {"HX": cal.get("C")},
+                "sigma": {"Cxx": np.asarray(cal["sigma_hx"], dtype=float),
+                          "Cxz": np.asarray(cal["sigma_hz"], dtype=float)}}
+    return tensor_calibration({s: setup_meta_path for s in sources})
 
 
 def load_tensor_features(dataset_dirs, freqs_hz=None, n_periods_extract=None):
@@ -443,6 +556,8 @@ __all__ = [
     "DEFAULT_COMPONENTS",
     "TENSOR_COMPONENTS",
     "build_bounds",
+    "resolve_tensor_calibration",
+    "tensor_objective_parts",
     "forward_tensor_for_tx",
     "load_tensor_features",
     "tensor_calibration",

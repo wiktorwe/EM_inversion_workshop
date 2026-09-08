@@ -290,18 +290,30 @@ Step 01 builds a **matrix** of forward datasets, not a single run:
 
 With the shipped defaults that is 4 frequencies × 2 sources = **8 datasets**,
 written as subdirectories of `workspace/2D/forward/` with a `manifest.json`
-listing them. Step 02 gains a **dataset** dropdown (everything in that notebook
-acts on the selected one) and a **Run modelling for ALL datasets** button.
+listing them. Steps 02, 04 and 06 each carry a **dataset** dropdown (everything
+in that notebook acts on the selected one), and Step 02 also has a **Run
+modelling for ALL datasets** button. `make_workshop_report.py` takes
+`--dataset NAME` or `--all-datasets`.
 
 The historical layout is preserved exactly: one broadband run with a single
 source still writes straight into `workspace/2D/forward/` with
 `setup_metadata.json` where it has always been, so the change can be A/B tested
 and older workspaces keep loading.
 
-Steps 04/05/06 still consume **one** dataset at a time — select it in Step 02.
-Inverting the full tensor jointly is a separate matter: `mpiEminvTE2d` applies a
-single `source_type` to every shot in a run, so joint multi-source FWI needs
-that value to become per-shot upstream in rockem-suite.
+Each notebook still consumes **one** dataset at a time — select it in that
+notebook's own dropdown. Step 05 is the exception: it reads a Kx dataset and, if
+one exists, a Kz dataset, because fitting the full 2×2 tensor needs both.
+
+Two caveats. Each per-frequency dataset has its own grid and so its own
+calibration; `|C| ∝ dx²`, so raw `|C|` is **not** comparable between them
+(measured 2.61 / 1.95 / 0.90 / 0.64 at 1/2/4/6 kHz purely from dx). Normalised
+as `C/dx²` the genuine spread is 2.04 % at 1 kHz.
+`fdtd_analytic_calibration.calibration_for_inversion_multi` assembles them
+correctly; Step 05's GUI does not yet call it (see `KNOWN_ISSUES.md`).
+
+Inverting the full tensor jointly in 2D is a separate matter: `mpiEminvTE2d`
+applies a single `source_type` to every shot in a run, so joint multi-source FWI
+needs that value to become per-shot upstream in rockem-suite.
 
 ### Extraction window must exclude the source ramp-up
 

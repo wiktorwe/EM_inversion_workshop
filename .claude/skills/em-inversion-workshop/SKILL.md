@@ -27,6 +27,8 @@ same edit that caused it:
 | Gave `check_kx_convergence` a new (lam_max) leg | kept the old `rel_tol=1e-4`, so Step 05's panel said "NOT CONVERGED" always | re-run the consumer, look at what the user sees |
 | Added Kz to the calibration | `forward_1d_gains` stayed hardcoded to Kx, so the 1D inversion could not use it | trace the new capability to every place it must appear |
 | Made Step 01 emit an acquisition matrix | Step 02 could only read a single dataset | run the next step, not just the one you edited |
+| Added `source_field` to `forward_1d_gains` | the empymod fallback still asked for `ab=44/64`, so a rejected Kz solve silently returned the **Kx** response | follow the new argument into every branch, including error paths |
+| Added the per-run acquisition matrix | `iter_datasets` passed legacy manifest entries through unnormalised, with no `source_field` key for consumers to index | define the contract (`DATASET_KEYS`) and make every producer satisfy it |
 
 ### The checklist, before you call any change done
 
@@ -34,8 +36,10 @@ same edit that caused it:
    for every function, argument, config key and metadata field you touched.
    Notebooks are code: they will not show up in an import check.
 2. Update **every** consumer in the same change.
-3. Run `python scripts/validate_notebooks.py` - it executes each notebook's
-   setup cell, which is where most of the GUI code lives.
+3. Run `python scripts/validate_notebooks.py` - it executes EVERY code cell of
+   every notebook. (It used to run only the first, which meant notebook 04's
+   959-line GUI cell was never checked at all.) Use an environment with the GUI
+   dependencies; without them every notebook "fails" for the wrong reason.
 4. Run the consumer that a user actually operates, and look at its output. An
    import that succeeds is not a behaviour that is correct.
 5. If a numeric default changes, re-derive the threshold that depends on it. A
@@ -49,10 +53,40 @@ This repo has already produced **three** divergent copies of the same 1D misfit
 silently kept a bug that had been fixed in the notebook. Prefer one
 implementation imported everywhere:
 
-- `scripts/modules/inversion_1d.py` - 1D parameterisation, misfit, tensor forward
+- `scripts/modules/inversion_1d.py` - 1D parameterisation, misfit, tensor
+  forward, `tensor_objective_parts` (THE decomposed misfit - `tensor_objective`
+  and `inversion_tuning.split_objective` are both thin wrappers over it),
+  `resolve_tensor_calibration` and `component_weights`. The last two used to
+  live in notebook 05 where `inversion_tuning` could not reach them, which is
+  exactly why the tuners kept a Kx-only copy and tuned a different objective
+  from the one being minimised.
 - `scripts/modules/headless.py` - the Step 01/02 pipeline as plain functions;
   notebooks call it rather than reimplementing it, and it is verified to
-  reproduce notebook 01's outputs byte-for-byte.
+  reproduce notebook 01's outputs byte-for-byte. `iter_datasets` is the one
+  dataset enumerator; every entry satisfies `DATASET_KEYS`.
+- `analytic_1d_forward.forward_1d_gains` is the ONLY forward. Notebook 05's
+  true-model QC overlay had its own solver loop until it was found to be both
+  Kx-only and crashing on any survey with more than one receiver.
+
+## RULE 2 - THE DOCS ARE PART OF THE CHAIN
+
+`KNOWN_ISSUES.md` and this skill are consumers like any other. **Any change that
+alters behaviour either of them describes must update both in the same edit.**
+
+- Fixed an entry in `KNOWN_ISSUES.md`? Delete it in that change. Do not leave it
+  "for later" - the next person will re-investigate a problem that no longer
+  exists.
+- Found a new limitation while fixing something else? Add it in that same
+  change, with what you measured. Most entries in that file were found this way.
+- Changed a default, a file name, a metadata key, a function signature or the
+  step order? Grep this skill for it and fix the text. The chain map below and
+  the `setup_metadata.json` key list are the parts that rot fastest.
+- Deleting an entry without the fix is the worst outcome of all: it converts a
+  known problem into an unknown one.
+
+Stale documentation in this repo has real cost, because both files are read as
+statements of fact about measured behaviour. If a number here cannot be
+reproduced by a script in `scripts/experiments/`, it should not be here.
 
 ## THE CHAIN, link by link
 
@@ -116,10 +150,14 @@ previous one; every arrow is a place a change can break something.
   silently wrong gradient, not an error.
 
 ### Step 04 - 2D results
-- **imports** `fd_visualization`, `rockem_bridge`, `segy`, `setup_defaults`
+- **imports** `fd_visualization`, `headless`, `rockem_bridge`, `segy`, `setup_defaults`
 - **reads** `Run{N}/` models + the forward data + `setup_metadata.json`
   (frequencies, `n_periods_extract`, SEG-Y template geometry)
 - **writes** `workspace/2D/results/Run{N}/` SEG-Y exports
+- **key chain fact** it has TWO code cells - setup and GUI. `_select_dataset`
+  is defined in the first and the dropdown in the second; both run in one
+  namespace under Voila. It carries a dataset dropdown built from
+  `headless.iter_datasets`, like Step 02.
 
 ### Step 05 - 1D layered inversion
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
@@ -137,14 +175,23 @@ previous one; every arrow is a place a change can break something.
 
 ### Step 06 - 1D results
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
-  `run_report`, `segy`, `setup_defaults`
-- **reads** `OneDRun{N}/` summaries + the forward data
+  `headless`, `run_report`, `segy`, `setup_defaults`
+- **reads** `OneDRun{N}/` summaries (including `run_metadata.json`'s
+  `data_convention`) + the forward data
 - **writes** `workspace/1D/results/` SEG-Y exports
+- **key chain facts**
+  - it carries the same dataset dropdown as Steps 02 and 04.
+  - it WARNS when a run's `data_convention` is older than
+    `run_report.DATA_CONVENTION`. Bump that constant whenever a change makes
+    new channel gains incomparable with old ones, and say why in its comment.
 
 ### Out of band
 `scripts/make_workshop_report.py` -> `workshop_report.py` reads the whole
 workspace and writes `workspace/report/workflow_report.tex` + figures. It reads
-`setup_metadata.json` and the calibration, so metadata changes reach it too.
+`setup_metadata.json` and the calibration, so metadata changes reach it too. It
+reports on ONE forward dataset: `--dataset NAME`, `--all-datasets` (one report
+per dataset under `report/<dataset>/`, because the figure basenames are fixed),
+`--list-datasets`. Every report names the dataset it is about.
 
 ### `setup_metadata.json` IS the contract
 
@@ -165,6 +212,17 @@ wavelet_n_periods  wavelet_ramp_seconds
 change** - grep every reader first (`setup_defaults.py` and notebooks 02/04/05/06
 are the main ones) and update them in the same edit.
 
+Two more contracts sit alongside it:
+
+- `manifest.json` (Step 01, at the forward ROOT) - read only through
+  `headless.iter_datasets`, which normalises both manifest schemas so every
+  entry has all of `headless.DATASET_KEYS`
+  (`name`, `run_dir`, `freq_hz`, `source_field`, `meta`). Index those keys
+  freely; anything else, check first.
+- `run_metadata.json` (Step 05, per 1D run) - carries `data_convention`, the
+  version of the observed-data extraction the run was fitted against. Step 06
+  warns when it is older than `run_report.DATA_CONVENTION`.
+
 ### Module dependency order
 
 `workshop_config` -> `rockem_bridge` -> everything else. `rockem_bridge` puts
@@ -172,7 +230,9 @@ rockem-suite's `python/` on `sys.path`, so nothing that needs `rockem.*` may be
 imported before it.
 
 `analytic_1d_forward` <- `inversion_1d` <- {`inversion_tuning`, notebook 05,
-`scripts/experiments/multiscale_1d.py`}
+`scripts/experiments/{multiscale_1d,tensor_1d_test,blockinv_tensor_test}.py`}
+`empymod_line_source` <- `analytic_1d_forward` (contrasted-interface fallback
+only; it takes `source_field` and MUST be given it)
 `fd` + `segy` + `source` + `survey` <- `headless` <- {notebook 01, notebook 02,
 all of `scripts/experiments/`}
 `fd_visualization` <- {notebooks 02/04/05/06, `workshop_report`, experiments}
@@ -190,6 +250,11 @@ all of `scripts/experiments/`}
 - **`n_periods_extract` must exclude the source ramp** (`alpha/f_min` seconds),
   and must be an integer number of `f_min` periods.
 - **`.rss` samples sit at `o + k*d`**, not at cell centres.
+- **`eps_r_cap` is 5000, not 1000.** At 1000 it BOUND at 1 and 2 kHz and threw
+  away `dt` for nothing; the bias removing it costs was measured at
+  0.029 %/0.069 % at 1 kHz against the 0.152 %/0.261 % already accepted at
+  6 kHz. Raising it changed `dt` by 1.548x/1.095x at 1/2 kHz and `dx` not at
+  all - so workspaces built before and after are NOT comparable at those tones.
 - **`apertx > 0` is a source-centred TOTAL width.** Structure beyond `apertx/2`
   from a shot is not in that shot's model at all - size it from the range you
   want to resolve, not from the survey offsets, or you will measure the aperture
@@ -197,11 +262,20 @@ all of `scripts/experiments/`}
 - **TE2D has no anisotropy input and correctly needs none** (Ey is horizontal,
   so VTI is degenerate with Sg/Ep). The old `A` key is REJECTED with a fatal
   error; write no anisotropy file.
-- **Every tensor component must be calibrated on the SAME Earth model.**
-  `fdtd_analytic_calibration_by_source` is last-write-wins per source, so it is
-  easy to end up with Kx calibrated on the lateral average and Kz on the
-  homogeneous halfspace - different C and different sigma SCALES, silently.
-  `inversion_1d.tensor_calibration` refuses that; Step 02 does not yet prevent it.
+- **Every tensor component must be calibrated on the SAME Earth model, AT EACH
+  FREQUENCY.** `fdtd_analytic_calibration_by_source` is last-write-wins per
+  source, so it is easy to end up with Kx calibrated on the lateral average and
+  Kz on the homogeneous halfspace - different C and different sigma SCALES,
+  silently. Step 02 now warns at the point of the mistake
+  (`calibration_consistency_warning`) and `inversion_1d.tensor_calibration`
+  still refuses it at inversion time. The comparison is deliberately WITHIN a
+  frequency: per-frequency datasets legitimately differ in `rho_ohm_m`
+  (26.09/27.60/29.04/29.85 at 1/2/4/6 kHz) because each grid resamples the same
+  `sg.rss` differently.
+- **`|C| ~ dx^2`, so raw `|C|` is meaningless across datasets with different
+  grids.** Measured 2.61/1.95/0.90/0.64 at 1/2/4/6 kHz for `dx` =
+  1.6/1.4/0.95/0.8 m. Compare `C/dx^2`; the real per-frequency spread is 2.04 %,
+  not 300 %.
 - **`mpiEminvTE2d` takes ONE `source_type` per run.** Joint multi-source FWI
   needs that to become per-shot upstream in rockem-suite.
 

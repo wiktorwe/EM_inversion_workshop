@@ -34,12 +34,20 @@ NEEDS_ROCKEM = {
 }
 
 
-def _first_code_cell(nb_path: Path) -> str:
+def _code_cells(nb_path: Path) -> str:
+    """EVERY code cell, concatenated, in order.
+
+    This used to return only the FIRST code cell. Notebook 04 has two - a setup
+    cell and a 959-line GUI cell - so more than half of it was never validated
+    at all, and a NameError in the GUI cell would only ever surface in front of
+    a user. Voila runs all of them, so validation must too.
+    """
     nb = json.loads(nb_path.read_text())
-    for cell in nb.get("cells", []):
-        if cell.get("cell_type") == "code":
-            return "".join(cell.get("source", []))
-    raise RuntimeError(f"No code cell in {nb_path.name}")
+    cells = ["".join(c.get("source", []))
+             for c in nb.get("cells", []) if c.get("cell_type") == "code"]
+    if not cells:
+        raise RuntimeError(f"No code cell in {nb_path.name}")
+    return "\n\n".join(cells)
 
 
 def _run_cell(code: str, nb_name: str) -> tuple[bool, str]:
@@ -47,6 +55,15 @@ def _run_cell(code: str, nb_name: str) -> tuple[bool, str]:
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     g: dict = {"__name__": "__main__", "__file__": str(ROOT / nb_name)}
+    # A live kernel injects `display` into the user namespace, so notebook cells
+    # legitimately use it without importing it. Provide it here for the same
+    # reason - otherwise every such cell fails validation for a reason that
+    # cannot happen in Voila.
+    try:
+        from IPython.display import display as _display
+        g["display"] = _display
+    except ImportError:
+        g["display"] = lambda *a, **k: None
     try:
         exec(compile(code, nb_name, "exec"), g)
         return True, "ok"
@@ -73,7 +90,7 @@ def main() -> int:
             print(f"FAIL  {name}: file not found")
             failures += 1
             continue
-        code = _first_code_cell(nb_path)
+        code = _code_cells(nb_path)
         ok, msg = _run_cell(code, name)
         if ok:
             print(f"OK    {name}")

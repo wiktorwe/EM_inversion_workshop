@@ -102,7 +102,7 @@ class SetupParams:
     points_per_skin: int = 8
     cells_per_min_offset: int = 8
     tan_delta_floor: float = 50.0
-    eps_r_cap: float = 1000.0
+    eps_r_cap: float = 5000.0          # see fd.ExplicitDesignInputs.eps_r_cap
     sigma_max_clip_s_per_m: Optional[float] = None
 
     # Aperture override. `design_explicit_fd` sizes apertx from the SURVEY
@@ -676,8 +676,21 @@ def build_forward_matrix(
     return manifest
 
 
+# Keys every `iter_datasets` entry is guaranteed to carry. Consumers (notebooks
+# 02/04/06, `workshop_report`) index these directly, so anything that produces a
+# dataset list must fill all of them.
+DATASET_KEYS = ("name", "run_dir", "freq_hz", "source_field", "meta")
+
+
 def iter_datasets(out_root: Path | str) -> list[dict]:
     """Every dataset in ``out_root``, from its manifest.
+
+    Every entry carries all of `DATASET_KEYS`, whichever manifest schema it came
+    from. That normalisation matters: `build_per_frequency_forward_inputs` (the
+    older per-frequency writer) records no per-run `source_field` at all - it
+    keeps one at the top level - so passing its entries through unchanged handed
+    consumers a dict missing a key they index, and the only manifest of that
+    shape is the one this workspace actually has.
 
     Falls back to treating ``out_root`` itself as one dataset when no manifest
     exists, so a workspace produced before the matrix was introduced still
@@ -687,7 +700,19 @@ def iter_datasets(out_root: Path | str) -> list[dict]:
     mpath = out_root / "manifest.json"
     if mpath.exists():
         man = json.loads(mpath.read_text())
-        return [dict(v, name=k) for k, v in man["runs"].items()]
+        default_src = str(man.get("source_field", "HX")).upper()
+        out = []
+        for name, run in man.get("runs", {}).items():
+            entry = dict(run, name=name)
+            meta = entry.get("meta") or {}
+            entry["source_field"] = str(
+                entry.get("source_field") or meta.get("source_field") or default_src
+            ).upper()
+            entry.setdefault("freq_hz", meta.get("f_min_hz"))
+            entry["run_dir"] = str(entry.get("run_dir") or (out_root / name))
+            entry["meta"] = meta
+            out.append(entry)
+        return out
     if (out_root / "setup_metadata.json").exists():
         meta = json.loads((out_root / "setup_metadata.json").read_text())
         return [{
@@ -699,6 +724,7 @@ def iter_datasets(out_root: Path | str) -> list[dict]:
 
 
 __all__ = [
+    "DATASET_KEYS",
     "SOURCE_TYPE_CODES",
     "build_forward_matrix",
     "build_per_frequency_forward_inputs",

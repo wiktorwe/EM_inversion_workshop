@@ -876,6 +876,56 @@ def _json_safe_calibration_payload(cal: Mapping[str, Any]) -> dict:
     return payload
 
 
+def calibration_consistency_warning(setup_meta_path: Path | str,
+                                    cal: Mapping[str, Any]) -> Optional[str]:
+    """Would storing `cal` leave the sources on different Earth models?
+
+    `save_calibration_to_metadata` is last-write-wins per source, so calibrating
+    Kx with the lateral-average method and Kz with the homogeneous one leaves a
+    file that LOOKS complete but mixes (say) a 29.85 Ohm-m reference with a
+    1.0 Ohm-m one - a different C and, worse, sigma on a different amplitude
+    scale. Measured the first time it happened: the Czz residual came out at
+    8 sigma while every other component sat under 0.2, purely because its sigma
+    came from the wrong Earth.
+
+    `inversion_1d.tensor_calibration` refuses that combination, but only at
+    inversion time, long after the mistake. This is the check at the point of
+    the mistake. Returns a message, or None when the file stays consistent.
+
+    It is a WARNING, not a refusal: calibrating one source is a legitimate step
+    on the way to calibrating both, and the mixed state only matters if someone
+    then inverts a tensor from it.
+    """
+    path = Path(setup_meta_path)
+    if not path.exists():
+        return None
+    meta = load_setup_metadata(path)
+    by_source = meta.get("fdtd_analytic_calibration_by_source") or {}
+    new_src = _check_source_field(cal.get("source_field", DEFAULT_SOURCE_FIELD))
+    new_earth = (str(cal.get("method", "?")), float(cal.get("rho_ohm_m", float("nan"))))
+
+    clashes = []
+    for src, block in by_source.items():
+        if str(src).upper() == new_src:
+            continue          # this one is being replaced
+        other = (str(block.get("method", "?")), float(block.get("rho_ohm_m", float("nan"))))
+        if other != new_earth:
+            clashes.append((str(src).upper(), other))
+    if not clashes:
+        return None
+
+    detail = "; ".join(f"{s} is {m} (rho_ref={r:.4g})" for s, (m, r) in sorted(clashes))
+    return (
+        f"Calibration methods now DISAGREE between sources: {new_src} is "
+        f"{new_earth[0]} (rho_ref={new_earth[1]:.4g}), while {detail}. "
+        "Every component of one tensor must be calibrated on the same Earth "
+        "model - sigma is on a different amplitude scale otherwise, which shows "
+        "up as a component sitting at many sigma for no physical reason. The 1D "
+        "tensor inversion will refuse this combination. Re-run the other "
+        f"source(s) with the {new_earth[0]} method before inverting a tensor."
+    )
+
+
 def save_calibration_to_metadata(setup_meta_path: Path | str, cal: Mapping[str, Any]) -> dict:
     """Persist one calibration into ``setup_metadata.json``.
 
@@ -942,6 +992,74 @@ def calibration_for_inversion(setup_meta_path: Path | str) -> dict:
     }
 
 
+def calibration_for_inversion_multi(setup_meta_paths, source_field=DEFAULT_SOURCE_FIELD) -> dict:
+    """One calibration assembled from several SINGLE-FREQUENCY datasets.
+
+    `calibration_for_inversion` returns the C array of ONE dataset, indexed by
+    that dataset's own `flist_hz`. When Step 01 builds a per-frequency
+    acquisition matrix, every frequency has its own dataset on its own grid with
+    its own fitted C - and they genuinely differ: measured +2.04 % at 1 kHz
+    against the broadband value, against 0.39 % scatter, with a same-grid control
+    reproducing to 0.001 % (so it is real grid dependence, not an assembly bug).
+    Averaging them, or reusing one dataset's C for another's data, puts that 2 %
+    straight into the misfit.
+
+    Pass the per-frequency `setup_metadata.json` paths - in any order - and get
+    back the same dict shape `calibration_for_inversion` returns, with every
+    array ordered by ascending frequency.
+    """
+    source_field = _check_source_field(source_field)
+    rows = {}
+    for path in setup_meta_paths:
+        meta = load_setup_metadata(path)
+        block = (meta.get("fdtd_analytic_calibration_by_source") or {}).get(source_field)
+        if block is None:
+            active = meta.get("fdtd_analytic_calibration") or {}
+            if str(active.get("source_field", DEFAULT_SOURCE_FIELD)).upper() == source_field:
+                block = active
+        if block is None:
+            raise KeyError(
+                f"No {source_field} calibration in {path}. Run the Step 02 "
+                f"calibration for that dataset with 'cal source' set to {source_field}."
+            )
+        c = (np.asarray(block["C_hxhz_shared_real"], dtype=float)
+             + 1j * np.asarray(block["C_hxhz_shared_imag"], dtype=float))
+        for i, f in enumerate(np.asarray(block["freqs_hz"], dtype=float)):
+            if float(f) in rows:
+                raise ValueError(
+                    f"Two calibrations for {f:g} Hz (the second from {path}). Pass "
+                    "one metadata file per frequency."
+                )
+            rows[float(f)] = {
+                "C": complex(c[i]),
+                "sigma_hx": float(np.asarray(block["sigma_hx"], dtype=float)[i]),
+                "sigma_hz": float(np.asarray(block["sigma_hz"], dtype=float)[i]),
+                "method": str(block.get("method", METHOD_HOMOGENEOUS)),
+                "notes": str(block.get("notes", "") or ""),
+                # Each per-frequency dataset has its OWN dx, and |C| ~ dx^2, so the
+                # raw magnitudes are NOT comparable between datasets - measured
+                # |C| = 2.61 / 1.95 / 0.90 / 0.64 at 1/2/4/6 kHz purely because
+                # dx = 1.6 / 1.4 / 0.95 / 0.8 m. Compare C/dx^2, never |C|.
+                "dx_m": float(block.get("dx_m", float("nan"))),
+            }
+    if not rows:
+        raise ValueError("No calibrations found in the given metadata files.")
+
+    freqs = sorted(rows)
+    methods = {rows[f]["method"] for f in freqs}
+    return {
+        "C": np.asarray([rows[f]["C"] for f in freqs], dtype=complex),
+        "sigma_hx": np.asarray([rows[f]["sigma_hx"] for f in freqs], dtype=float),
+        "sigma_hz": np.asarray([rows[f]["sigma_hz"] for f in freqs], dtype=float),
+        "freqs_hz": np.asarray(freqs, dtype=float),
+        "dx_m": np.asarray([rows[f]["dx_m"] for f in freqs], dtype=float),
+        "method": methods.pop() if len(methods) == 1 else "+".join(sorted(methods)),
+        "notes": (f"Assembled per-frequency from {len(setup_meta_paths)} dataset(s); "
+                  f"each frequency carries its own C fitted on its own grid."),
+        "per_frequency": True,
+    }
+
+
 __all__ = [
     "DEFAULT_SOURCE_FIELD",
     "SOURCE_FIELDS",
@@ -956,6 +1074,8 @@ __all__ = [
     "METHOD_LATERAL_AVERAGE",
     "apply_calibration_to_gains",
     "calibration_for_inversion",
+    "calibration_for_inversion_multi",
+    "calibration_consistency_warning",
     "calibration_geometry",
     "calibration_geometry_production",
     "calibration_rx_dz_m",

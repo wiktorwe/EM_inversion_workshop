@@ -60,6 +60,24 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Omit the 1D inversion section even if a run exists.",
     )
+    parser.add_argument(
+        "--dataset",
+        default=None,
+        help=(
+            "Forward dataset of the acquisition matrix to report on, by name "
+            "(see --list-datasets). Default: the first one."
+        ),
+    )
+    parser.add_argument(
+        "--all-datasets",
+        action="store_true",
+        help="Write one report per dataset, into workspace/report/<dataset>/.",
+    )
+    parser.add_argument(
+        "--list-datasets",
+        action="store_true",
+        help="List the forward datasets available to report on, then exit.",
+    )
     return parser.parse_args(argv)
 
 
@@ -68,23 +86,55 @@ def main(argv: list[str] | None = None) -> int:
     root = (args.root or ROOT).expanduser().resolve()
     load_config(root)
 
-    from scripts.modules.workshop_report import build_report
+    from scripts.modules.workshop_report import build_report, forward_datasets
 
-    try:
-        result = build_report(
-            root=root,
-            include_2d=not args.no_2d,
-            include_1d=not args.no_1d,
-            run_2d=args.run_2d,
-            run_1d=args.run_1d,
-            compile_pdf_flag=bool(args.compile),
-        )
-    except FileNotFoundError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+    datasets = forward_datasets(root)
+    if args.list_datasets:
+        if not datasets:
+            print("No forward datasets found - run Step 01 first.")
+            return 1
+        for d in datasets:
+            print(f"{d['name']:>20}  source={d['source_field']:<3} "
+                  f"freq={d['freq_hz']}  {d['run_dir']}")
+        return 0
+
+    if args.all_datasets and args.dataset:
+        print("ERROR: pass --dataset or --all-datasets, not both", file=sys.stderr)
         return 1
-    except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
+
+    wanted = ([d["name"] for d in datasets] if args.all_datasets and datasets
+              else [args.dataset])
+
+    results = []
+    for name in wanted:
+        try:
+            results.append(build_report(
+                root=root,
+                include_2d=not args.no_2d,
+                include_1d=not args.no_1d,
+                run_2d=args.run_2d,
+                run_1d=args.run_1d,
+                dataset=name,
+                compile_pdf_flag=bool(args.compile),
+            ))
+        except FileNotFoundError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+
+    if len(results) > 1:
+        for r in results:
+            print(f"Wrote {r['tex_path']}  (dataset {r['dataset']})")
+        print(f"\n{len(results)} dataset report(s) written.")
+        return 0
+
+    result = results[0]
+    if result.get("n_datasets", 0) > 1:
+        print(f"Reporting on dataset {result['dataset']!r} of "
+              f"{result['n_datasets']} in the acquisition matrix "
+              f"(use --dataset or --all-datasets to change this).")
 
     tex_path = result["tex_path"]
     pdf_path = result["pdf_path"]

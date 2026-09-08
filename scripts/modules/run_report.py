@@ -197,6 +197,24 @@ def write_1d_run_reports(run_dir: Path | str, summary: Mapping[str, Any]) -> dic
     return {"summary_json": json_path, "report_md": md_path}
 
 
+# Version of the OBSERVED-DATA convention a 1D run was fitted against. Bump it
+# whenever a change makes new channel gains incomparable with old ones, and say
+# why here - the number is only useful if it can be traced to a reason.
+#
+#   1  the original convention: `steady_state_gains` took "the last N samples"
+#      of each record, and `n_periods_extract` included the source ramp.
+#   2  (current) extraction windows are aligned on ABSOLUTE time with an exact
+#      sub-sample phase correction, and `n_periods_extract` excludes the ramp.
+#      Runs made under convention 1 were fitting phases wrong by up to 21.6
+#      degrees, plus ~173 degrees of aliasing at 6 kHz, so their chi-squared is
+#      not comparable with anything produced now.
+#
+# Runs written before this stamp existed carry no `data_convention` key at all;
+# notebook 06 treats a missing key as convention 1 and says so on load, which is
+# the only way an old run can be told apart from a new one after the fact.
+DATA_CONVENTION = 2
+
+
 def write_1d_run_metadata(
     run_dir: Path | str,
     cfg: Mapping[str, Any],
@@ -208,6 +226,7 @@ def write_1d_run_metadata(
     meta = {
         "run_dir": str(run_dir),
         "timestamp": datetime.datetime.now().isoformat(),
+        "data_convention": int(DATA_CONVENTION),
         "n_runs_per_tx": int(n_runs),
         "seed_base": int(cfg.get("seed", 0)),
         "seeds": [int(s) for s in seeds],
@@ -257,6 +276,7 @@ __all__ = [
     "format_run_parameters_html",
     "json_safe",
     "render_1d_run_report_md",
+    "DATA_CONVENTION",
     "write_1d_run_metadata",
     "write_1d_run_reports",
 ]

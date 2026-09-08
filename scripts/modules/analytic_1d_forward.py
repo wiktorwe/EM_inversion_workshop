@@ -315,9 +315,12 @@ def forward_1d_gains(
                             f"{exc}; empymod line-source fallback unavailable ({import_exc})"
                         ) from import_exc
                     try:
+                        # source_field MUST be threaded through. Without it this
+                        # returned the Kx response for a rejected Kz solve -
+                        # silently, since the fallback only warns generically.
                         hx_fb, hz_fb = forward_empymod_line_gains(
                             rho, thickness, np.asarray([f]), off_x[mask], tx_depth_m,
-                            float(depth), eps_r,
+                            float(depth), eps_r, source_field=source_field,
                         )
                     except Exception as fb_exc:
                         raise ForwardRejected(
@@ -326,8 +329,9 @@ def forward_1d_gains(
                     hx_f, hz_f = hx_fb[0], hz_fb[0]
                     used_empymod_fallback = True
                     warnings.warn(
-                        "analytic forward rejected on contrasted interface; "
-                        "used empymod line-source fallback",
+                        f"analytic {source_field} forward rejected on contrasted "
+                        f"interface at {float(f):.4g} Hz; used the empymod "
+                        f"line-source fallback for source {source_field}",
                         stacklevel=2,
                     )
                 else:

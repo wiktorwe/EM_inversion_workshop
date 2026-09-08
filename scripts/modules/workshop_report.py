@@ -1117,6 +1117,17 @@ def compile_pdf(tex_path: Path) -> Path:
     return tex_path.with_suffix(".pdf")
 
 
+def forward_datasets(root: Optional[Path] = None) -> list[dict[str, Any]]:
+    """The forward datasets available to report on, newest schema normalised."""
+    from scripts.modules.headless import iter_datasets
+
+    cfg = load_config((root or Path.cwd()).resolve())
+    try:
+        return iter_datasets(cfg.fwd_2d_dir)
+    except Exception:
+        return []
+
+
 def build_report(
     *,
     root: Optional[Path] = None,
@@ -1124,11 +1135,37 @@ def build_report(
     include_1d: bool = True,
     run_2d: Optional[str] = None,
     run_1d: Optional[str] = None,
+    dataset: Optional[str] = None,
     compile_pdf_flag: bool = False,
 ) -> dict[str, Any]:
+    """Build the workflow report for ONE forward dataset.
+
+    `dataset` names one entry of the acquisition matrix (`manifest.json`). The
+    report used to read `cfg.fwd_2d_dir/setup_metadata.json` unconditionally,
+    which on a matrix workspace is not a dataset at all - the datasets live in
+    subdirectories - so it reported whichever file it happened to find, or
+    failed. With a matrix present and no `dataset` given it takes the first and
+    records which, so the report always says what it is about. Figures and the
+    .tex go to `report/<dataset>/` whenever a matrix exists, so building every
+    dataset does not have them overwrite each other.
+    """
     root = (root or Path.cwd()).resolve()
     cfg = load_config(root)
-    meta_path = setup_metadata_path(root)
+
+    datasets = forward_datasets(root)
+    chosen = None
+    if datasets:
+        if dataset is not None:
+            chosen = next((d for d in datasets if d["name"] == dataset), None)
+            if chosen is None:
+                names = ", ".join(d["name"] for d in datasets)
+                raise ValueError(f"No dataset named {dataset!r}. Available: {names}")
+        else:
+            chosen = datasets[0]
+
+    is_matrix = len(datasets) > 1
+    fwd_dir = Path(chosen["run_dir"]) if chosen else cfg.fwd_2d_dir
+    meta_path = fwd_dir / "setup_metadata.json"
     if not meta_path.exists():
         raise FileNotFoundError(
             f"Missing {meta_path}. Finalize Step 01 (Generate FD inputs) before making a report."
@@ -1138,19 +1175,29 @@ def build_report(
         raise FileNotFoundError(f"Could not read setup metadata at {meta_path}")
 
     report_dir = cfg.workspace / "report"
+    if is_matrix and chosen is not None:
+        # Figure basenames are fixed, so several datasets can only coexist in
+        # separate directories.
+        report_dir = report_dir / str(chosen["name"])
     figures_dir = report_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
 
     ctx = ReportContext(
         root=root,
         cfg=cfg,
-        fwd_dir=cfg.fwd_2d_dir,
+        fwd_dir=fwd_dir,
         setup_meta=meta,
         setup_meta_path=meta_path,
         report_dir=report_dir,
         figures_dir=figures_dir,
         timestamp=datetime.datetime.now().isoformat(timespec="seconds"),
     )
+    if chosen is not None:
+        ctx.notes.append(
+            f"Forward dataset: {chosen['name']} (source={chosen['source_field']}, "
+            f"freq={chosen['freq_hz']}) at {_display_path(fwd_dir, root)}"
+            + (f"; {len(datasets)} datasets in the acquisition matrix" if is_matrix else "")
+        )
     if include_2d:
         ctx.run_2d = resolve_run_dir(cfg.inv_2d_runs_dir, run_2d, kind="2D", required=bool(run_2d))
     if include_1d:
@@ -1183,6 +1230,8 @@ def build_report(
         "tex_path": tex_path,
         "pdf_path": pdf_path,
         "report_dir": report_dir,
+        "dataset": (chosen["name"] if chosen else None),
+        "n_datasets": len(datasets),
         "figures": dict(ctx.figures),
         "notes": list(ctx.notes),
         "run_2d": ctx.run_2d,
@@ -1195,6 +1244,7 @@ __all__ = [
     "ReportContext",
     "available_synthetic_pairs",
     "build_report",
+    "forward_datasets",
     "compile_pdf",
     "latest_sg_up_file",
     "list_run_dirs",

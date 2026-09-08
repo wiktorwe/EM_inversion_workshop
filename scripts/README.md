@@ -151,6 +151,10 @@ confirms or falsifies it; none of them are imported by the notebooks.
 - `per_frequency_cost.py`: recomputes the per-frequency vs broadband design cost
   from `design_explicit_fd` rather than trusting a table, with and without the
   `eps_r` cap.
+- `per_frequency_production.py`: runs the full 30-transmitter survey once per
+  frequency and MEASURES the saving `per_frequency_cost.py` only predicts. It
+  leaves the four datasets under `workspace/2D/per_frequency/` in place, which
+  is what the per-frequency calibration and the multi-scale ladder consume.
 - `per_frequency_ab.py`: runs the calibration once per frequency on that
   frequency's own grid and checks it reproduces the broadband table; also tests
   the phase reference (analysis-window shift invariance) and measures the
@@ -176,7 +180,25 @@ confirms or falsifies it; none of them are imported by the notebooks.
   `lam_max` (truncation) leg, not just `n_nodes`, which is blind to it.
 - `eps_r_bias.py`: the artificial-permittivity bias the calibration cannot see,
   measured by evaluating the analytic solver at `eps_r_used` and at a physical
-  `eps_r`.
+  `eps_r`. This is the measurement behind `eps_r_cap = 5000`.
+- `interface_snapping.py`: how far half a cell of interface quantisation moves
+  the data, against the calibrated noise floor - the evidence for and against
+  turning `unpack_model_params(snap_dz=...)` on.
+- `multiscale_2d_run.py`: driver for the 2D frequency ladder. See
+  `KNOWN_ISSUES.md` for why the head-to-head it exists for has not been run.
+- `tensor_1d_test.py`: does the 1D inversion work with all four tensor
+  components? Checks the TRUE model against the FDTD data first - if the truth
+  does not fit, nothing downstream means anything - then inverts from a uniform
+  start with and without the cross-couplings, scoring both on all four.
+- `blockinv_tensor_test.py`: the same question for the BlockInv optimizer, which
+  packs its data and Jacobian into flat real vectors. Also the regression gate
+  for that packing: on the Kx pair it must reproduce the pre-generalisation
+  result exactly.
+- `empymod_sign_check.py`: the empymod/native complex ratio for BOTH sources,
+  which is what justifies `_EMPY_LINE_SIGN = -1` and the `ab` codes. It runs a
+  CONTROL with a deliberately wrong `ab` and FAILS if that also passes - every
+  correct pairing comes out at the same 1.000064, which is indistinguishable
+  from a harness comparing something against itself unless you check.
 
 ## `scripts/dev/`
 
@@ -202,9 +224,25 @@ Other utilities:
   python scripts/make_workshop_report.py --no-2d --no-1d
   ```
 
+  One report covers ONE forward dataset. On an acquisition-matrix workspace:
+
+  ```bash
+  python scripts/make_workshop_report.py --list-datasets
+  python scripts/make_workshop_report.py --dataset f1000Hz_hx
+  python scripts/make_workshop_report.py --all-datasets   # report/<dataset>/ each
+  ```
+
+  With no `--dataset` it takes the first and says so. `--all-datasets` writes to
+  a subdirectory per dataset because the figure basenames are fixed.
+
   The script does not re-run modelling or inversion. `--compile` runs
   `pdflatex` if it is on PATH. `./clean.sh` removes the report with `workspace/`.
-- `validate_notebooks.py`: smoke-test each notebook's setup cell (`python scripts/validate_notebooks.py --expect-rockem-missing` if rockem-suite is not configured yet).
+- `validate_notebooks.py`: execute EVERY code cell of every notebook as a smoke
+  test (`python scripts/validate_notebooks.py --expect-rockem-missing` if
+  rockem-suite is not configured yet). It used to run only the first code cell,
+  which left notebook 04's GUI cell - the larger of its two - unchecked. Run it
+  in an environment that has the GUI dependencies, or every notebook "fails" for
+  the wrong reason.
 - `normalize_notebooks.py`: add nbformat cell ids to all workshop notebooks (run after editing `.ipynb` files).
 - `../jupyter_config/jupyter_server_config.py`: Voila websocket settings used by `start_*.sh`.
 

@@ -11,10 +11,13 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 from scipy.optimize import differential_evolution
 
-from scripts.modules.analytic_1d_forward import ForwardRejected
 from scripts.modules.inversion_1d import (
+    DEFAULT_COMPONENTS,
     build_bounds,
-    forward_analytic_for_tx,
+    component_weights,
+    n_tensor_data,
+    resolve_tensor_calibration,
+    tensor_objective_parts,
     unpack_model_params,
 )
 
@@ -50,7 +53,6 @@ DEFAULT_LAMBDA_GRID: Tuple[float, ...] = (
 
 DEFAULT_SEED_SPREAD_TOL = 0.05
 DEFAULT_N_TUNE_SEEDS = 5
-_REJECT_COST = 1e12
 
 
 # The model parameterisation, the bounds and the per-Tx analytic forward used to
@@ -60,12 +62,14 @@ _REJECT_COST = 1e12
 # implementation drifts: the fix landed in the notebook and left this copy
 # behind. They now come from `scripts.modules.inversion_1d`, the single
 # implementation the notebook also imports.
-
-
-def _forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
-                             n_nodes=120):
-    return forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel,
-                                   eps_r, n_nodes=n_nodes)
+#
+# The MISFIT was the last piece still duplicated here, and it had drifted the
+# same way: it stayed a two-component Kx-only functional after the run it is
+# supposed to tune grew to the full 2x2 tensor, so with Czx/Czz selected these
+# tuners recommended a DE budget and a lambda for an objective nobody was
+# minimising. It now delegates to `inversion_1d.tensor_objective_parts`, which
+# `tensor_objective` also returns its total from - one implementation, three
+# numbers, no second copy to drift.
 
 
 def split_objective(
@@ -76,50 +80,35 @@ def split_objective(
     z_end_rel,
     eps_r,
     reg_lambda,
-    w_hxh,
-    w_hxhz,
-    sigma_hx,
-    sigma_hz,
-    C=None,
+    cal,
+    components=DEFAULT_COMPONENTS,
+    weights=None,
+    freq_mask=None,
+    snap_dz=None,
 ) -> Tuple[float, float, float]:
-    """Return (data_misfit, reg_norm, total) matching notebook 05 complex_gain_objective."""
-    try:
-        hx_pred, hz_pred = _forward_analytic_for_tx(
-            params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
-        )
-    except ForwardRejected:
-        return _REJECT_COST, 0.0, _REJECT_COST
+    """`(data_misfit, reg_norm, total)` for the objective the run minimises.
 
-    obs_hx = np.asarray(tx_entry["obs_hx_gain"], dtype=complex)
-    obs_hz = np.asarray(tx_entry["obs_hz_gain"], dtype=complex)
-    cal = np.asarray(C, dtype=complex)[:, None] if C is not None else 1.0
-
-    res_x = (cal * hx_pred - obs_hx) / np.maximum(np.asarray(sigma_hx, dtype=float)[:, None], 1e-300)
-    res_z = (cal * hz_pred - obs_hz) / np.maximum(np.asarray(sigma_hz, dtype=float)[:, None], 1e-300)
-
-    m1, m2 = np.isfinite(res_x), np.isfinite(res_z)
-    if not np.any(m1) and not np.any(m2):
-        return _REJECT_COST, 0.0, _REJECT_COST
-
-    data_misfit = 0.0
-    if np.any(m1):
-        data_misfit += float(w_hxh) * float(np.nansum(np.where(m1, np.abs(res_x) ** 2, np.nan)))
-    if np.any(m2):
-        data_misfit += float(w_hxhz) * float(np.nansum(np.where(m2, np.abs(res_z) ** 2, np.nan)))
-
-    reg_norm = 0.0
-    if int(n_layers) > 1:
-        lrho = np.asarray(params[:n_layers], dtype=float)
-        reg_norm = float(np.mean(np.diff(lrho) ** 2))
-
-    total = data_misfit + float(reg_lambda) * reg_norm
-    return data_misfit, reg_norm, total
+    `cal` is the per-source/per-component shape that
+    `inversion_1d.resolve_tensor_calibration` returns, NOT the flat
+    `sigma_hx`/`sigma_hz`/`C` triple this function used to take.
+    """
+    return tensor_objective_parts(
+        params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r, reg_lambda, cal,
+        components=components, weights=weights, freq_mask=freq_mask, snap_dz=snap_dz,
+    )
 
 
-def _n_data_from_tx(tx_entry) -> int:
-    nfreq = int(np.asarray(tx_entry["freqs"]).size)
-    nrx = int(np.asarray(tx_entry["off_x"]).size)
-    return 2 * nfreq * nrx * 2  # Hx+Hz, real+imag
+def _components_and_cal(cfg: Mapping[str, Any]):
+    """The components, calibration and weights the tuners must use.
+
+    Resolved from `cfg` exactly as `invert_single_tx` resolves them, so a tuner
+    result is about the run the user is going to make.
+    """
+    components = tuple(cfg.get("components") or DEFAULT_COMPONENTS)
+    cal = cfg.get("tensor_calibration")
+    if cal is None:
+        cal = resolve_tensor_calibration(cfg, cfg.get("setup_meta_path"))
+    return components, cal, component_weights(cfg)
 
 
 def relative_objective_spread(values: Sequence[float]) -> float:
@@ -135,7 +124,7 @@ def relative_objective_spread(values: Sequence[float]) -> float:
 
 def run_de_once(cfg: Mapping[str, Any], tx_entry: Mapping[str, Any], seed: int) -> Dict[str, Any]:
     """One DE inversion; returns params and split objective terms."""
-    cal = cfg["calibration"]
+    components, cal, weights = _components_and_cal(cfg)
     n_layers = int(cfg["n_layers"])
     bounds = build_bounds(
         n_layers,
@@ -154,11 +143,9 @@ def run_de_once(cfg: Mapping[str, Any], tx_entry: Mapping[str, Any], seed: int) 
             z_end_rel=cfg["z_end_rel"],
             eps_r=cfg["eps_r"],
             reg_lambda=cfg["reg_lambda"],
-            w_hxh=cfg["w_hxh"],
-            w_hxhz=cfg["w_hxhz"],
-            sigma_hx=cal["sigma_hx"],
-            sigma_hz=cal["sigma_hz"],
-            C=cal.get("C"),
+            cal=cal,
+            components=components,
+            weights=weights,
         )
         return total
 
@@ -181,13 +168,11 @@ def run_de_once(cfg: Mapping[str, Any], tx_entry: Mapping[str, Any], seed: int) 
         z_end_rel=cfg["z_end_rel"],
         eps_r=cfg["eps_r"],
         reg_lambda=cfg["reg_lambda"],
-        w_hxh=cfg["w_hxh"],
-        w_hxhz=cfg["w_hxhz"],
-        sigma_hx=cal["sigma_hx"],
-        sigma_hz=cal["sigma_hz"],
-        C=cal.get("C"),
+        cal=cal,
+        components=components,
+        weights=weights,
     )
-    n_data = _n_data_from_tx(tx_entry)
+    n_data = n_tensor_data(tx_entry, components)
     return {
         "success": bool(getattr(out, "success", True)),
         "seed": int(seed),
@@ -251,8 +236,11 @@ def tune_de_budget(
     n_jobs: int = -1,
 ) -> Dict[str, Any]:
     """Raise DE budget until multi-seed total-objective spread is within tol."""
-    if "calibration" not in cfg:
-        raise ValueError("cfg must include calibration from notebook 02.")
+    if "calibration" not in cfg and "tensor_calibration" not in cfg:
+        raise ValueError(
+            "cfg must include a calibration from notebook 02 - either the flat "
+            "'calibration' (Kx-only) or a resolved 'tensor_calibration'."
+        )
     base_seed = int(cfg.get("seed", 42) if base_seed is None else base_seed)
     n_seeds = max(int(n_seeds), 1)
     seeds = [base_seed + k for k in range(n_seeds)]
@@ -376,8 +364,11 @@ def tune_lambda_lcurve(
     n_jobs: int = -1,
 ) -> Dict[str, Any]:
     """Sweep lambda at fixed DE popsize/maxiter; pick L-curve corner."""
-    if "calibration" not in cfg:
-        raise ValueError("cfg must include calibration from notebook 02.")
+    if "calibration" not in cfg and "tensor_calibration" not in cfg:
+        raise ValueError(
+            "cfg must include a calibration from notebook 02 - either the flat "
+            "'calibration' (Kx-only) or a resolved 'tensor_calibration'."
+        )
     seed = int(cfg.get("seed", 42) if seed is None else seed)
     lam_list = [float(v) for v in lambdas]
     jobs = [(cfg, tx_entry, lam, seed) for lam in lam_list]

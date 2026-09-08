@@ -327,8 +327,9 @@ Measured directly, `eps_r_used = 399.4` against a physical `eps_r = 7`:
 
 The worst case is at `f_max` and `rho_max`, exactly where the loss-tangent floor
 of 50 binds by construction. Raising the `eps_r` cap for the low-frequency runs
-(section 8) costs only 0.03 / 0.07 %, well inside what the high-frequency runs
-already accept - so it is safe by the workshop's own standard.
+(section 9) costs only 0.03 / 0.07 %, well inside what the high-frequency runs
+already accept - so it is safe by the workshop's own standard. That saving has
+since been TAKEN: the cap is 5000, see section 9.
 
 ---
 
@@ -433,14 +434,35 @@ each run divides by its own wavelet phasor and the time base cancels. Confirmed
 independently by varying the analysis window on one per-frequency run - stable to
 0.0007 % at `n_periods` 2/3/4, jumping to 0.178 % at 5 (section 2).
 
-### The eps_r cap
+### The eps_r cap - measured, then taken
 
 `eps_r = sigma_min / (tan_delta_floor * omega_max * eps0)` grows as frequency
-falls, so it clips at `eps_r_cap = 1000` for the 1 and 2 kHz runs (uncapped:
-2397 and 1198), throwing away part of the low-frequency time-step gain. Removing
-the cap is worth another 1.10x overall and costs 0.029 % / 0.069 % bias at
-1 kHz - well inside the 0.152 % / 0.261 % the 6 kHz run already accepts
-(section 7). Safe by the workshop's own standard.
+falls, so at the old `eps_r_cap = 1000` it clipped for the 1 and 2 kHz runs
+(uncapped: 2397 and 1198), throwing away part of the low-frequency time-step
+gain for nothing. Removing the clip costs 0.029 % / 0.069 % bias at 1 kHz -
+well inside the 0.152 % / 0.261 % the 6 kHz run already accepts (section 7).
+
+**The cap is now 5000** (`fd.ExplicitDesignInputs.eps_r_cap`,
+`headless.SetupParams.eps_r_cap`, and the Step 01 widget), which is non-binding
+across the whole workshop band while still catching a runaway design. Re-measured
+after the change, at the production rho range and order 6:
+
+| f | dx (m) | eps_r before | eps_r after | cap binding | dt gain |
+|---|---|---|---|---|---|
+| 1 kHz | 1.60 | 1000 (capped) | 2396.7 | was yes, now no | **1.548x** |
+| 2 kHz | 1.40 | 1000 (capped) | 1198.3 | was yes, now no | **1.095x** |
+| 4 kHz | 0.95 | 599.2 | 599.2 | no | 1.000x |
+| 6 kHz | 0.80 | 399.4 | 399.4 | no | 1.000x |
+
+`dx` is unchanged at every frequency (asserted in the check, not assumed) - the
+cap only ever touched `dt`. The uncapped values reproduce the 2397 / 1198
+predicted above exactly, which is the confirmation that the clip was the only
+thing binding.
+
+Existing workspaces are unaffected: they carry their own `eps_r_used` in
+`setup_metadata.json` and their own calibration. But a workspace built after this
+change is NOT numerically comparable with one built before it at 1 or 2 kHz -
+different `dt`, so a different `C`.
 
 ---
 

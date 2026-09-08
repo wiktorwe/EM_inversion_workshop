@@ -46,7 +46,17 @@ class ExplicitDesignInputs:
     points_per_skin: int = 8
     cells_per_min_offset: int = 8
     tan_delta_floor: float = 50.0
-    eps_r_cap: float = 1000.0
+    # Raised from 1000 to 5000 once the bias it buys was actually measured.
+    # At 1000 the cap BOUND at 1 and 2 kHz (uncapped need: 2397 and 1198),
+    # throwing away part of the low-frequency dt gain for nothing. The
+    # artificial-permittivity bias that removing the clip costs was measured at
+    # 0.029 % amplitude / 0.069 % phase at 1 kHz - well inside the
+    # 0.152 % / 0.261 % the 6 kHz run already accepts uncapped, so the cap was
+    # not protecting accuracy, it was just leaving ~1.10x of speed on the table.
+    # 5000 is non-binding across the whole workshop band and still catches a
+    # runaway design. See `scripts/experiments/eps_r_bias.py` and
+    # doc/numerics_findings.md section 7.
+    eps_r_cap: float = 5000.0
     sigma_max_clip_s_per_m: Optional[float] = None
     lpml: int = 13
     kappa_max: float = 11.0
@@ -82,7 +92,7 @@ def _safety_from_eps_r(eps_r: float) -> float:
     """`explicit_cfl_safety` vs. `eps_r`.
 
     Flat at the repo-wide default 0.95 for the full supported range (up to
-    `eps_r_cap`'s default of 1000) - confirmed directly for the SMALL-
+    `eps_r_cap`'s default of 5000) - confirmed directly for the SMALL-
     offset, offset-limited-dx, off-axis-receiver regime this workshop's
     default survey sits in (offsets ~13-25 m, dx sized off the minimum
     offset rather than skin depth, rx_dz=-20 m): a properly-normalized (see

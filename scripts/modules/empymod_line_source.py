@@ -59,6 +59,16 @@ from scripts.modules.rockem_bridge import model
 # pi phase flip with amplitude agreement" rather than an exact -1: at n_y=120 the
 # near-offset integrand is under-resolved by up to 14 %.
 #
+# Re-measured for the Kz source when `ab=46`/`ab=66` were added
+# (`scripts/experiments/empymod_sign_check.py`, graded y-grid, y_max = 60 km,
+# 1601 nodes): with this constant in place the empymod/native COMPLEX ratio is
+# 1.000064 - 0.000000j for every source (Kx and Kz), every receiver component,
+# both tones and all four offsets - i.e. the same convention, and the residual
+# 6.4e-5 is a common y-quadrature bias rather than anything source-specific.
+# That script also runs the control that makes the result mean something:
+# pairing a native Cxx against ab=46 gives 4.369 - 2.016j, so a wrong ab code is
+# rejected rather than absorbed.
+#
 # Independent corroboration that the sign belongs on the EMPYMOD side, not the
 # native one: the workshop's FDTD-vs-analytic calibration fits C = FDTD/native
 # and gets a phase of +0.02 to -0.12 deg, not 180 deg - so the native solver
@@ -92,7 +102,8 @@ def empymod_line_yintegral(
 ) -> np.ndarray:
     """Line-source response via integral of empymod.dipole(..., ab) over source y'.
 
-    `ab` is empymod's RECEIVER-then-SOURCE code (44 = Hx<-Kx, 64 = Hz<-Kx).
+    `ab` is empymod's RECEIVER-then-SOURCE code: 44 = Hx<-Kx, 64 = Hz<-Kx,
+    46 = Hx<-Kz, 66 = Hz<-Kz. See `_AB_FOR_SOURCE`.
     """
     empymod = _require_empymod()
     depth, res, epermH = model.layers_to_stack(layers, tx_depth_m)
@@ -118,6 +129,21 @@ def empymod_line_yintegral(
     return out
 
 
+# empymod's `ab` is RECEIVER-then-SOURCE, with 4/5/6 the magnetic x/y/z dipoles.
+# So a Kx line source is read as (44, 64) = (Hx<-Kx, Hz<-Kx), and a Kz one as
+# (46, 66) = (Hx<-Kz, Hz<-Kz).
+#
+# Only the Kx pair used to exist here, and `forward_1d_gains` called this
+# function positionally without passing its `source_field` through. The result
+# was not a failure but a SUBSTITUTION: a rejected Kz solve fell back to the Kx
+# response and returned it as if it were Kz, with only the generic
+# "used empymod line-source fallback" warning, which does not name the source.
+_AB_FOR_SOURCE = {
+    "HX": (44, 64),
+    "HZ": (46, 66),
+}
+
+
 def forward_empymod_line_gains(
     rho: np.ndarray,
     thickness: np.ndarray,
@@ -127,11 +153,20 @@ def forward_empymod_line_gains(
     rx_depth_m: float,
     eps_r: float,
     n_y: int = 120,
+    source_field: str = "HX",
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Complex (Hx, Hz) channel gain per unit Kx source, shape [nfreq, nrx].
+    """Complex (Hx, Hz) channel gain per unit source, shape [nfreq, nrx].
 
-    Same I/O convention as `analytic_1d_forward.forward_1d_gains`.
+    Same I/O convention as `analytic_1d_forward.forward_1d_gains`, including
+    `source_field` ("HX" for a Kx line source, "HZ" for Kz).
     """
+    source_field = str(source_field).upper()
+    if source_field not in _AB_FOR_SOURCE:
+        raise ValueError(
+            f"source_field must be one of {sorted(_AB_FOR_SOURCE)}, got {source_field!r}"
+        )
+    ab_hx, ab_hz = _AB_FOR_SOURCE[source_field]
+
     freqs_hz = np.asarray(freqs_hz, dtype=float).reshape(-1)
     off_x = np.asarray(off_x, dtype=float).reshape(-1)
     layers: List[Layer1D] = layers_from_rho_thk(rho, thickness, eps_r)
@@ -141,10 +176,10 @@ def forward_empymod_line_gains(
     hz = np.full((nfreq, nrx), np.nan, dtype=complex)
     for ifreq, f in enumerate(freqs_hz):
         hx[ifreq, :] = empymod_line_yintegral(
-            off_x, float(f), layers, tx_depth_m, rx_depth_m, ab=44, n_y=n_y,
+            off_x, float(f), layers, tx_depth_m, rx_depth_m, ab=ab_hx, n_y=n_y,
         )
         hz[ifreq, :] = empymod_line_yintegral(
-            off_x, float(f), layers, tx_depth_m, rx_depth_m, ab=64, n_y=n_y,
+            off_x, float(f), layers, tx_depth_m, rx_depth_m, ab=ab_hz, n_y=n_y,
         )
 
     if not (np.all(np.isfinite(hx)) and np.all(np.isfinite(hz))):
