@@ -290,26 +290,41 @@ Step 01 builds a **matrix** of forward datasets, not a single run:
 
 With the shipped defaults that is 4 frequencies × 2 sources = **8 datasets**,
 written as subdirectories of `workspace/2D/forward/` with a `manifest.json`
-listing them. Steps 02, 04 and 06 each carry a **dataset** dropdown (everything
-in that notebook acts on the selected one), and Step 02 also has a **Run
-modelling for ALL datasets** button. `make_workshop_report.py` takes
-`--dataset NAME` or `--all-datasets`.
+listing them.
+
+**Whatever you select in Step 01 runs together from then on.** Step 02 has
+**Run modelling for ALL datasets** and **Calibrate ALL datasets**, both
+sequential; Step 05 fits every frequency and both sources in one inversion; and
+`make_workshop_report.py --all-datasets` writes a report per dataset. Headless,
+the whole matrix is one command:
+
+```bash
+python scripts/run_matrix.py            # model + calibrate every dataset
+```
+
+Steps 02, 03, 04 and 06 also carry a **dataset** dropdown for inspecting or
+staging one at a time. Step 03 is the only step that genuinely must work on one
+dataset at a time, because `mpiEminvTE2d` applies a single `source_type` per
+run.
 
 The historical layout is preserved exactly: one broadband run with a single
 source still writes straight into `workspace/2D/forward/` with
 `setup_metadata.json` where it has always been, so the change can be A/B tested
 and older workspaces keep loading.
 
-Each notebook still consumes **one** dataset at a time — select it in that
-notebook's own dropdown. Step 05 is the exception: it reads a Kx dataset and, if
-one exists, a Kz dataset, because fitting the full 2×2 tensor needs both.
+Step 05 consumes the **whole** matrix: every per-frequency dataset contributes
+the one tone it was designed for, both sources contribute their two tensor
+components, and the inversion fits them together. Steps 03, 04 and 06 work on
+one dataset at a time by nature — staging a single FWI run, or looking at one
+result.
 
-Two caveats. Each per-frequency dataset has its own grid and so its own
-calibration; `|C| ∝ dx²`, so raw `|C|` is **not** comparable between them
-(measured 2.61 / 1.95 / 0.90 / 0.64 at 1/2/4/6 kHz purely from dx). Normalised
-as `C/dx²` the genuine spread is 2.04 % at 1 kHz.
-`fdtd_analytic_calibration.calibration_for_inversion_multi` assembles them
-correctly; Step 05's GUI does not yet call it (see `KNOWN_ISSUES.md`).
+Each per-frequency dataset has its own grid and so its own calibration, and
+Step 05 assembles C per frequency to match. Worth knowing when reading those
+numbers: `|C| ∝ dx²`, so raw `|C|` is **not** comparable between datasets —
+measured 2.61 / 1.95 / 0.90 / 0.64 at 1/2/4/6 kHz purely because dx is
+1.6 / 1.4 / 0.95 / 0.8 m. Normalised as `C/dx²` the genuine spread is 2.04 % at
+1 kHz, and the 6 kHz same-grid control reproduces the broadband value to
+0.001 %.
 
 Inverting the full tensor jointly in 2D is a separate matter: `mpiEminvTE2d`
 applies a single `source_type` to every shot in a run, so joint multi-source FWI

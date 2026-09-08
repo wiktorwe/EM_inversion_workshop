@@ -131,30 +131,7 @@ geometry, which is why it is still here.
 
 ---
 
-## 7. Per-frequency C exists, but nothing in the GUI assembles it yet
-
-**Status: the library half is done; the notebook half is not.**
-
-`fdtd_analytic_calibration.calibration_for_inversion_multi` and
-`inversion_1d.tensor_calibration` both take per-frequency metadata now, and are
-verified against the four `workspace/2D/per_frequency/f*Hz` datasets. Notebook
-05 still resolves ONE `SETUP_META`, so a user inverting a per-frequency matrix
-through the GUI gets one dataset's C rather than the assembled one.
-
-**Fix:** have notebook 05 collect the metadata paths from `iter_datasets` when a
-matrix is present and call `calibration_for_inversion_multi`. It needs a
-decision first about which datasets constitute "the survey", which is why it was
-not done blind.
-
-**Trap worth knowing:** raw `|C|` is NOT comparable between per-frequency
-datasets - measured 2.61 / 1.95 / 0.90 / 0.64 at 1/2/4/6 kHz purely because
-`|C| ~ dx^2` and `dx` is 1.6 / 1.4 / 0.95 / 0.8 m. Normalised as `C/dx^2` the
-real spread is +2.04 % at 1 kHz, and the 6 kHz same-grid control reproduces the
-broadband value to 0.001 %.
-
----
-
-## 8. Notebook 03's second code cell relies on an injected `display`
+## 7. Notebook 03's second code cell relies on an injected `display`
 
 **Status: harmless in Voila, a trap for anything headless.**
 

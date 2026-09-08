@@ -237,6 +237,21 @@ Other utilities:
 
   The script does not re-run modelling or inversion. `--compile` runs
   `pdflatex` if it is on PATH. `./clean.sh` removes the report with `workspace/`.
+- `run_matrix.py`: model AND calibrate every dataset of the acquisition matrix
+  in one command, sequentially. Step 01 already recorded which frequencies and
+  sources were selected; nothing downstream should make you re-enter that one
+  dataset at a time.
+
+  ```bash
+  python scripts/run_matrix.py --dry-run          # show the plan
+  python scripts/run_matrix.py                    # model + calibrate everything
+  python scripts/run_matrix.py --skip-modelling   # datasets already modelled
+  ```
+
+  Each dataset is calibrated with the source it was modelled with, and one
+  `--method` is applied to all of them (mixing methods across sources is what
+  the tensor inversion refuses). A failure in one dataset is reported and
+  stepped over rather than abandoning the batch.
 - `validate_notebooks.py`: execute EVERY code cell of every notebook as a smoke
   test (`python scripts/validate_notebooks.py --expect-rockem-missing` if
   rockem-suite is not configured yet). It used to run only the first code cell,

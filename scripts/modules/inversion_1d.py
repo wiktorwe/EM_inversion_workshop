@@ -13,7 +13,7 @@ The notebook imports these; it no longer defines them.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -473,76 +473,132 @@ def resolve_tensor_calibration(cfg, setup_meta_path):
         return {"C": {"HX": cal.get("C")},
                 "sigma": {"Cxx": np.asarray(cal["sigma_hx"], dtype=float),
                           "Cxz": np.asarray(cal["sigma_hz"], dtype=float)}}
+    # `setup_meta_path` may be one path shared by every source (the historical
+    # case - one dataset's metadata carries every calibration it has run), or a
+    # PER-SOURCE mapping, which is what an acquisition matrix needs: each source
+    # has its own datasets, and with per-frequency datasets each source has a
+    # LIST of them. Handing one source's paths to another would silently
+    # calibrate Kz against Kx's grid.
+    if isinstance(setup_meta_path, Mapping):
+        missing = [s for s in sources if s not in setup_meta_path]
+        if missing:
+            raise KeyError(
+                f"No calibration metadata given for source(s) {missing}. "
+                f"Have: {sorted(setup_meta_path)}."
+            )
+        return tensor_calibration({s: setup_meta_path[s] for s in sources})
     return tensor_calibration({s: setup_meta_path for s in sources})
 
 
 def load_tensor_features(dataset_dirs, freqs_hz=None, n_periods_extract=None):
     """Per-Tx observations for every available tensor component.
 
-    `dataset_dirs` maps a source component to the forward run that used it. Both
-    receiver components come out of each run, so two directories give all four
-    tensor components. Geometry is cross-checked between sources: a silent
-    mismatch in transmitter positions or offsets would pair the wrong traces and
-    show up only as an unexplained misfit.
+    `dataset_dirs` maps a source component to the forward run that used it - or
+    to a SEQUENCE of runs, one per single-frequency dataset. Both receiver
+    components come out of each run, so two sources give all four tensor
+    components, and a per-frequency matrix contributes its tones one dataset at
+    a time.
+
+    Passing a list is how a per-frequency acquisition matrix is inverted at
+    once. Each dataset is extracted at ITS OWN frequency (from its own
+    `flist_hz` and `n_periods_extract`) and the rows are then stacked in
+    ascending frequency order, because a per-frequency dataset only contains
+    the tone it was designed for - asking it for the whole band would read
+    noise at three of the four.
+
+    Geometry is cross-checked between every dataset: a silent mismatch in
+    transmitter positions or offsets would pair the wrong traces and show up
+    only as an unexplained misfit.
     """
     import json
     from scripts.modules.fd_visualization import compute_gains_for_fd_outputs
 
-    per_src, ref = {}, None
-    for src, d in dataset_dirs.items():
-        src, d = str(src).upper(), Path(d)
-        meta = json.loads((d / "setup_metadata.json").read_text())
-        f = np.asarray(freqs_hz if freqs_hz is not None else meta["flist_hz"], dtype=float)
-        npx = float(n_periods_extract if n_periods_extract is not None
-                    else meta["n_periods_extract"])
-        g = compute_gains_for_fd_outputs(
-            d / "Data" / "Hxshot.rss", d / "Data" / "Hzshot.rss", d / "wav2d.rss",
-            freqs=f, f_min_hz=float(meta["f_min_hz"]), n_periods_extract=npx,
-        )
-        per_src[src] = {"g": g, "meta": meta, "freqs": f}
-        geo = g["geometry"]
-        key = (np.round(np.asarray(geo["tx_unique"], float), 4).tolist(),
-               np.round(np.asarray(geo["rx_x"], float), 4).tolist())
-        if ref is None:
-            ref = (src, key)
-        elif key != ref[1]:
+    want = None if freqs_hz is None else np.asarray(freqs_hz, dtype=float).reshape(-1)
+
+    rows, geo_ref, ref_label = {}, None, None
+    for src, dirs in dataset_dirs.items():
+        src = str(src).upper()
+        if isinstance(dirs, (str, Path)):
+            dirs = [dirs]
+        for d in dirs:
+            d = Path(d)
+            meta = json.loads((d / "setup_metadata.json").read_text())
+            f_here = np.asarray(meta["flist_hz"], dtype=float).reshape(-1)
+            if want is not None:
+                f_here = np.asarray([f for f in f_here
+                                     if np.any(np.isclose(want, f))], dtype=float)
+                if f_here.size == 0:
+                    continue
+            npx = float(n_periods_extract if n_periods_extract is not None
+                        else meta["n_periods_extract"])
+            g = compute_gains_for_fd_outputs(
+                d / "Data" / "Hxshot.rss", d / "Data" / "Hzshot.rss", d / "wav2d.rss",
+                freqs=f_here, f_min_hz=float(meta["f_min_hz"]), n_periods_extract=npx,
+            )
+            geo = g["geometry"]
+            key = (np.round(np.asarray(geo["tx_unique"], float), 4).tolist(),
+                   np.round(np.asarray(geo["rx_x"], float), 4).tolist())
+            if geo_ref is None:
+                geo_ref, ref_label, geo_keep = key, f"{src}:{d.name}", geo
+            elif key != geo_ref:
+                raise ValueError(
+                    f"Dataset {src}:{d.name} has a different survey geometry from "
+                    f"{ref_label}. Every tensor component must come from the same survey."
+                )
+            for i, f in enumerate(f_here):
+                slot = (src, float(f))
+                if slot in rows:
+                    raise ValueError(
+                        f"Two datasets provide source {src} at {f:g} Hz (the second "
+                        f"is {d}). Pass one dataset per frequency per source."
+                    )
+                rows[slot] = {"Hx": np.asarray(g["Hx"]["gain"][i, :], dtype=complex),
+                              "Hz": np.asarray(g["Hz"]["gain"][i, :], dtype=complex)}
+
+    if not rows:
+        raise ValueError("No usable datasets in dataset_dirs.")
+
+    sources = sorted({s for s, _ in rows})
+    freqs = np.asarray(sorted({f for _, f in rows}), dtype=float)
+    for s in sources:
+        missing = [f for f in freqs if (s, float(f)) not in rows]
+        if missing:
             raise ValueError(
-                f"Dataset {src} has a different survey geometry from {ref[0]}. "
-                "Every tensor component must come from the same survey."
+                f"Source {s} has no dataset at {missing} Hz. Every component of one "
+                "tensor must cover the same band."
             )
 
-    first = next(iter(per_src.values()))
-    geo = first["g"]["geometry"]
-    tx_idx = np.asarray(geo["tx_idx_per_trace"], dtype=int)
-    tx_unique = np.asarray(geo["tx_unique"], dtype=float)
-    rx_x = np.asarray(geo["rx_x"], dtype=float)
-    rx_z = np.asarray(geo["rx_z"], dtype=float)
+    tx_idx = np.asarray(geo_keep["tx_idx_per_trace"], dtype=int)
+    tx_unique = np.asarray(geo_keep["tx_unique"], dtype=float)
+    rx_x = np.asarray(geo_keep["rx_x"], dtype=float)
+    rx_z = np.asarray(geo_keep["rx_z"], dtype=float)
 
     tx_data = {}
     for t in np.unique(tx_idx):
         tr = np.where(tx_idx == int(t))[0]
         obs = {}
-        for src, blk in per_src.items():
-            for comp, (s_c, r_c) in TENSOR_COMPONENTS.items():
-                if s_c != src:
-                    continue
-                obs[comp] = np.asarray(
-                    blk["g"]["Hx" if r_c == "HX" else "Hz"]["gain"][:, tr], dtype=complex
-                )
+        for comp, (s_c, r_c) in TENSOR_COMPONENTS.items():
+            if s_c not in sources:
+                continue
+            obs[comp] = np.stack(
+                [rows[(s_c, float(f))]["Hx" if r_c == "HX" else "Hz"][tr] for f in freqs]
+            ).astype(complex)
         tx_data[int(t)] = {
             "tx_id": int(t),
             "tx_x": float(tx_unique[int(t), 0]),
             "tx_z": float(tx_unique[int(t), 1]),
+            "rx_x": rx_x[tr],
+            "rx_z": rx_z[tr],
             "off_x": rx_x[tr] - float(tx_unique[int(t), 0]),
             "off_z": rx_z[tr] - float(tx_unique[int(t), 1]),
-            "freqs": first["freqs"],
+            "freqs": freqs,
             "obs": obs,
             # kept so the historical single-source objective still works
             "obs_hx_gain": obs.get("Cxx"),
             "obs_hz_gain": obs.get("Cxz"),
         }
-    return {"tx_data": tx_data, "components": sorted(obs), "freqs": first["freqs"],
-            "sources": sorted(per_src)}
+    return {"tx_data": tx_data, "components": sorted(obs), "freqs": freqs,
+            "sources": sources, "geometry": geo_keep}
 
 
 def build_bounds(n_layers, log10_rho_min, log10_rho_max, log10_thk_min, log10_thk_max):

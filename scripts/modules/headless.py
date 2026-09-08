@@ -30,7 +30,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -478,6 +478,76 @@ def run_calibration(fwd_dir: Path | str, *, method: str, nproc: int = 6,
     return cal
 
 
+def run_calibration_matrix(out_root: Path | str, *, method: str, nproc: int = 6,
+                           datasets: Optional[Sequence[Mapping[str, Any]]] = None,
+                           sources: Optional[Sequence[str]] = None,
+                           save_to_metadata: bool = True,
+                           verbose: bool = True,
+                           on_progress=None) -> list[dict]:
+    """Calibrate EVERY dataset of the acquisition matrix, sequentially.
+
+    Choosing N frequencies and both sources in Step 01 must not turn into 2N
+    rounds of picking a dataset, picking a source and pressing a button. Step 01
+    already recorded what was selected; this walks that list.
+
+    By default each dataset is calibrated with **its own** source - the one it
+    was modelled with - which is what the 1D tensor inversion then reads back
+    per source (`inversion_1d.tensor_calibration` takes one metadata path per
+    source). Pass `sources` to calibrate every dataset with a fixed set instead.
+
+    ONE `method` for all of them, deliberately: mixing methods across sources is
+    the mistake `fdtd_analytic_calibration.calibration_consistency_warning`
+    exists to catch, and a batch loop is the easiest possible way to commit it.
+
+    `on_progress(i, n, dataset, cal_or_exception)` is called after each dataset,
+    so a GUI can report progress without this function importing ipywidgets.
+
+    A failure on one dataset does not abandon the rest: it is recorded in that
+    entry's `"error"` and the loop continues, because a two-hour batch that
+    stops on the first bad dataset is worse than one that tells you which failed.
+    """
+    out_root = Path(out_root)
+    ds = list(datasets) if datasets is not None else iter_datasets(out_root)
+    if not ds:
+        raise FileNotFoundError(
+            f"No forward datasets under {out_root}. Run Step 01, then Step 02 modelling."
+        )
+
+    results: list[dict] = []
+    for i, d in enumerate(ds, start=1):
+        wanted = ([str(s).upper() for s in sources] if sources is not None
+                  else [str(d.get("source_field", "HX")).upper()])
+        for src in wanted:
+            label = f"{d['name']} [{src}]"
+            if verbose:
+                print(f"\n[{i}/{len(ds)}] calibrating {label} ({method})")
+            entry = {"name": d["name"], "run_dir": str(d["run_dir"]),
+                     "source_field": src, "method": method}
+            try:
+                cal = run_calibration(d["run_dir"], method=method, nproc=nproc,
+                                      source_field=src,
+                                      save_to_metadata=save_to_metadata,
+                                      verbose=verbose)
+                entry["cal"] = cal
+                entry["ok"] = True
+            except Exception as exc:                      # noqa: BLE001
+                entry["ok"] = False
+                entry["error"] = f"{type(exc).__name__}: {exc}"
+                if verbose:
+                    print(f"       FAILED: {entry['error']}")
+            results.append(entry)
+            if on_progress is not None:
+                on_progress(len(results), len(ds) * len(wanted), d, entry)
+
+    if verbose:
+        n_ok = sum(1 for r in results if r.get("ok"))
+        print(f"\nCalibrated {n_ok}/{len(results)} dataset-source pairs with {method}.")
+        for r in results:
+            if not r.get("ok"):
+                print(f"  FAILED {r['name']} [{r['source_field']}]: {r['error']}")
+    return results
+
+
 def format_calibration_table(cal) -> str:
     """One-line-per-frequency |C|/dx^2 / phase / scatter table."""
     c = np.asarray(cal["C_hxhz_shared"], dtype=complex)
@@ -736,5 +806,6 @@ __all__ = [
     "fd_design_for",
     "format_calibration_table",
     "run_calibration",
+    "run_calibration_matrix",
     "run_forward",
 ]
