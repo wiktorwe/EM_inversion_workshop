@@ -11,7 +11,12 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 from scipy.optimize import differential_evolution
 
-from scripts.modules.analytic_1d_forward import ForwardRejected, forward_1d_gains
+from scripts.modules.analytic_1d_forward import ForwardRejected
+from scripts.modules.inversion_1d import (
+    build_bounds,
+    forward_analytic_for_tx,
+    unpack_model_params,
+)
 
 try:
     from joblib import Parallel, delayed
@@ -48,42 +53,19 @@ DEFAULT_N_TUNE_SEEDS = 5
 _REJECT_COST = 1e12
 
 
-def unpack_model_params(params, n_layers, z_start_rel, z_end_rel):
-    """Match notebook 05 parameterization (log10 rho / log10 thk, span-normalized)."""
-    p = np.asarray(params, dtype=float)
-    lrho = p[:n_layers]
-    rho = np.power(10.0, lrho)
-    lthk = p[n_layers:]
-    thk_raw = np.power(10.0, lthk)
-    thk_raw = np.clip(thk_raw, 1e-9, np.inf)
-    span = float(z_end_rel - z_start_rel)
-    if span <= 0:
-        raise ValueError("Invalid depth window: z_end_rel must be > z_start_rel")
-    if thk_raw.size != max(0, n_layers - 1):
-        raise ValueError("Thickness parameter count mismatch.")
-    if thk_raw.size > 0:
-        thk = thk_raw / np.sum(thk_raw) * span
-        depth = float(z_start_rel) + np.cumsum(thk)
-    else:
-        thk = np.array([], dtype=float)
-        depth = np.array([], dtype=float)
-    return rho, thk, depth
+# The model parameterisation, the bounds and the per-Tx analytic forward used to
+# be duplicated here, verbatim from notebook 05's cell. That third copy also
+# carried notebook 05's `rx_depth_m = tx_z + off_z[0]` bug (every receiver forced
+# to the FIRST receiver's depth) - which is precisely how a duplicated
+# implementation drifts: the fix landed in the notebook and left this copy
+# behind. They now come from `scripts.modules.inversion_1d`, the single
+# implementation the notebook also imports.
 
 
-def build_bounds(n_layers, log10_rho_min, log10_rho_max, log10_thk_min, log10_thk_max):
-    b = [(float(log10_rho_min), float(log10_rho_max)) for _ in range(int(n_layers))]
-    for _ in range(int(n_layers) - 1):
-        b.append((float(log10_thk_min), float(log10_thk_max)))
-    return b
-
-
-def _forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r, n_nodes=120):
-    rho, thk, _ = unpack_model_params(params, n_layers, z_start_rel, z_end_rel)
-    tx_z = float(tx_entry["tx_z"])
-    off_x = np.asarray(tx_entry["off_x"], dtype=float)
-    off_z = np.asarray(tx_entry["off_z"], dtype=float)
-    rx_depth_m = tx_z + float(off_z[0]) if off_z.size else tx_z
-    return forward_1d_gains(rho, thk, tx_entry["freqs"], off_x, tx_z, rx_depth_m, eps_r, n_nodes=n_nodes)
+def _forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
+                             n_nodes=120):
+    return forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel,
+                                   eps_r, n_nodes=n_nodes)
 
 
 def split_objective(
