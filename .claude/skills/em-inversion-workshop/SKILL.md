@@ -115,9 +115,16 @@ previous one; every arrow is a place a change can break something.
   - `eps_r_used` goes into `ep.rss` AND into the metadata, because the analytic
     reference must use the same value or the calibration is not comparing like
     with like.
-  - the matrix path routes through `headless.build_forward_matrix`; the single
-    path is the historical inline code. Both must keep producing identical
-    output for the single case - it is the A/B baseline.
+  - **there is no broadband run and no single-dataset action, anywhere.**
+    `build_forward_matrix` always writes one dataset per frequency per source;
+    the `split_by_frequency` switch and the `One run per frequency` checkbox are
+    gone. A broadband grid is set by the highest tone and its record length by
+    the lowest, so it pays for both ends at once - measured 621.9 s against
+    312.1 s split. Step 01 also builds one single-tone wavelet PER FREQUENCY;
+    there is no broadband wavelet to build or to display.
+  - `iter_datasets` still falls back to treating the forward directory itself as
+    one dataset. That is a READER for legacy workspaces already on disk, not a
+    way to create one.
 
 ### Step 02 - forward modelling + calibration
 - **imports** `fd_visualization`, `fdtd_analytic_calibration`, `headless`,
@@ -128,15 +135,18 @@ previous one; every arrow is a place a change can break something.
   `fdtd_analytic_calibration` (active, Kx only) and
   `fdtd_analytic_calibration_by_source` back into `setup_metadata.json`
 - **key chain facts**
-  - **the matrix runs as a batch, not one dataset at a time.** "Run modelling
-    for ALL datasets" and "Calibrate ALL datasets" both walk
+  - **every action is on ALL datasets. There are no single-dataset buttons.**
+    Modelling, gain extraction, calibration and saving each walk
     `headless.iter_datasets`; `headless.run_calibration_matrix` is the shared
-    loop, and `scripts/run_matrix.py` does both headlessly. Choosing N
-    frequencies and both sources in Step 01 must never become 2N rounds of
-    picking a dataset and pressing a button.
+    calibration loop and `scripts/run_matrix.py` does the lot headlessly. The
+    per-dataset "Run modelling", "Calibrate (homogeneous)" and
+    "Calibrate (lateral average)" buttons and the `cal source` dropdown were
+    REMOVED - they made the operator carry the acquisition matrix in their head
+    and could leave a workspace half-processed or mixed across Earth models.
   - the batch calibrates each dataset with the source it was MODELLED with, and
-    uses ONE method for all of them - mixing methods across sources is what
-    `calibration_consistency_warning` exists to catch.
+    uses ONE method for all of them.
+  - the `dataset` dropdown that remains is a VIEW selector for the plots. It
+    changes what you look at, never what runs.
   - `compute_gains_for_fd_outputs` -> `steady_state_gains` is THE extraction used
     by Steps 02/04/05/06 and the report. Its windowing rules (absolute-time
     alignment, ramp exclusion) are load-bearing for all of them.
@@ -148,10 +158,12 @@ previous one; every arrow is a place a change can break something.
 
 ### Step 03 - 2D inversion staging and run
 - **imports** `fd_visualization`, `headless`, `inversion`, `workshop_config`
-- **key chain fact** it stages ONE inversion at a time, because `mpiEminvTE2d`
-  takes a single `source_type` per run - but WHICH dataset is selectable, via
-  the same dropdown as Steps 02/04/06. It read `CONFIG.fwd_2d_dir` directly
-  until that was fixed, so on a matrix workspace it found no `sg.rss` at all.
+- **key chain fact** it stages and runs EVERY dataset, sequentially, in one
+  action. The runs cannot be joint - `mpiEminvTE2d` takes a single
+  `source_type` per run - but they are not a per-dataset choice either. Inputs
+  go to `inversion/input/<dataset>/`, each run records its dataset in
+  `Run{N}/dataset.txt`, and Stop halts the whole batch rather than letting the
+  next dataset start.
 - **reads** a forward dataset: `mod.cfg` (for `order`, `lpml`, `pml_*`,
   `source_type`), `sg.rss`, `ep.rss`, `wav2d.rss`, `Data/{Hx,Hz}shot.rss`
 - **writes** `workspace/2D/inversion/input/` and `Run{N}/`: `inv.cfg`,
@@ -184,6 +196,10 @@ previous one; every arrow is a place a change can break something.
   (`calibration_for_inversion_multi`, and `resolve_tensor_calibration` accepts a
   per-source mapping of metadata lists). Reusing one dataset's C across a band
   it was not fitted on is a real error, not a rounding one.
+- **every available tensor component is fitted.** The component selector is
+  gone: if Step 01 built a Kz dataset, the full 2x2 tensor is what gets
+  inverted. Fitting a subset of what was acquired throws data away, and the
+  cross-couplings improve both criteria (chi2 0.7596 vs 0.8140).
 - **writes** `workspace/1D/inversion/OneDRun{N}/`: `REPORT.md`,
   `analytic_1d_inversion_summary.json`, `run_metadata.json`
 - **key chain facts**
@@ -296,11 +312,15 @@ all of `scripts/experiments/`}
   1.6/1.4/0.95/0.8 m. Compare `C/dx^2`; the real per-frequency spread is 2.04 %,
   not 300 %.
 - **`mpiEminvTE2d` takes ONE `source_type` per run.** Joint multi-source FWI
-  needs that to become per-shot upstream in rockem-suite. That is the ONLY
-  place in the workshop where the matrix legitimately forces one dataset at a
-  time. Everywhere else, whatever Step 01 selected must run together: if a step
-  makes the user switch a dropdown N times to do what Step 01 already
-  described, that is a defect, not a workflow.
+  needs that to become per-shot upstream in rockem-suite. Even there the runs
+  are issued as ONE sequential batch, not as a per-dataset choice.
+- **THERE IS NO SINGLE-ANYTHING ACTION.** Step 01 fixes the frequencies and the
+  sources; every step after it acts on all of them. No broadband run, no
+  broadband wavelet, no broadband wavelet DISPLAY, no per-source calibration
+  button, no component subset. If a control makes the user pick one frequency,
+  one source or one dataset to *act* on, delete it - a selector that only
+  changes what is *displayed* is fine. This is the most frequently re-broken
+  rule in the repo; it has now been re-litigated three times.
 - **Every per-frequency dataset has its own grid, its own C and its own
   `n_periods_extract`.** Never read a whole band out of one per-frequency
   dataset - it only contains the tone it was designed for, and the others are

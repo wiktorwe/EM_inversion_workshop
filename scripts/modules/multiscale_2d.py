@@ -324,8 +324,8 @@ def build_ladder(
     runs = [r for r in per_frequency_manifest["runs"].values() if r.get("freq_hz") is not None]
     if not runs:
         raise ValueError(
-            "The manifest contains no per-frequency datasets. Build them with "
-            "build_forward_matrix(..., split_by_frequency=True) - a broadband "
+            "The manifest contains no per-frequency datasets. Rebuild the "
+            "workspace with Step 01 / build_forward_matrix - a legacy broadband "
             "manifest cannot drive a frequency ladder."
         )
     sources = [str(s).upper() for s in (source_fields or ("HX",))]

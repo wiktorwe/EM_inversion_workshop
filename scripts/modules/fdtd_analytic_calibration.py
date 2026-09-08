@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -940,6 +941,15 @@ def save_calibration_to_metadata(setup_meta_path: Path | str, cal: Mapping[str, 
       displacing the active one.
     """
     path = Path(setup_meta_path)
+    # The Earth-model consistency check lives HERE, at the single choke point
+    # every writer goes through, not in one caller's handler. It was in notebook
+    # 02's single-dataset button only, so the batch loop
+    # (`headless.run_calibration_matrix`) could silently produce exactly the
+    # mixed-model file the check exists to prevent - e.g. calibrating one source
+    # homogeneous by hand and then letting the batch do the other one
+    # lateral-average, which leaves rho_ref 1 alongside rho_ref 29.85.
+    warning = calibration_consistency_warning(path, cal)
+
     meta = load_setup_metadata(path) if path.exists() else {}
     payload = _json_safe_calibration_payload(cal)
     source_field = _check_source_field(payload.get("source_field", DEFAULT_SOURCE_FIELD))
@@ -948,6 +958,16 @@ def save_calibration_to_metadata(setup_meta_path: Path | str, cal: Mapping[str, 
     meta["fdtd_analytic_calibration_by_source"] = by_source
     if source_field == DEFAULT_SOURCE_FIELD:
         meta["fdtd_analytic_calibration"] = payload
+
+    # Recorded in the file as well as raised, so the inconsistency is visible to
+    # anyone who opens the metadata later rather than only to whoever was
+    # watching the GUI at the time. Cleared when the file becomes consistent.
+    if warning:
+        meta["calibration_consistency_warning"] = warning
+        warnings.warn(warning, stacklevel=2)
+    else:
+        meta.pop("calibration_consistency_warning", None)
+
     path.write_text(json.dumps(meta, indent=2) + "\n")
     return meta
 

@@ -278,34 +278,42 @@ Two reasons this is worth the extra run:
 
 ### The acquisition matrix: one run per (frequency, source component)
 
-Step 01 builds a **matrix** of forward datasets, not a single run:
+Step 01 builds a **matrix** of forward datasets. There is no broadband run and
+no single-dataset option anywhere in the workshop:
 
 - **sources** — a multi-select (Kx and/or Kz). Selecting both builds both
   datasets and so completes the 2×2 magnetic coupling matrix.
-- **One run per frequency** — a checkbox, on by default. Spatial sampling is set
-  by the *highest* frequency and record length by the *lowest*, so a single
-  broadband run applies the fine grid of the top tone through the long record of
-  the bottom one. Measured on this survey: **312.1 s split against 621.9 s
-  broadband** — 1.99× serially, up to 5.84× if the runs go concurrently.
+- **one dataset per frequency, always.** Spatial sampling is set by the
+  *highest* frequency and record length by the *lowest*, so a broadband run
+  applies the fine grid of the top tone through the long record of the bottom
+  one and pays for both. Measured on this survey: **312.1 s split against
+  621.9 s broadband** — 1.99× serially, up to 5.84× concurrently. Each dataset
+  gets its own `dx`/`dt`/`eps_r`, its own **single-tone wavelet**, and its own
+  calibration.
 
 With the shipped defaults that is 4 frequencies × 2 sources = **8 datasets**,
 written as subdirectories of `workspace/2D/forward/` with a `manifest.json`
 listing them.
 
-**Whatever you select in Step 01 runs together from then on.** Step 02 has
-**Run modelling for ALL datasets** and **Calibrate ALL datasets**, both
-sequential; Step 05 fits every frequency and both sources in one inversion; and
-`make_workshop_report.py --all-datasets` writes a report per dataset. Headless,
-the whole matrix is one command:
+**Whatever you select in Step 01 runs together from then on, and there is no
+way to run less than all of it.** Step 02 models, extracts and calibrates every
+dataset in one action each; Step 03 stages and runs every dataset's inversion
+sequentially; Step 05 fits every frequency and every available tensor component
+in one inversion; `make_workshop_report.py --all-datasets` writes a report per
+dataset. Headless, the whole matrix is one command:
 
 ```bash
 python scripts/run_matrix.py            # model + calibrate every dataset
 ```
 
-Steps 02, 03, 04 and 06 also carry a **dataset** dropdown for inspecting or
-staging one at a time. Step 03 is the only step that genuinely must work on one
-dataset at a time, because `mpiEminvTE2d` applies a single `source_type` per
-run.
+The per-dataset **Run modelling**, **Calibrate (homogeneous)** and **Calibrate
+(lateral average)** buttons, the **cal source** dropdown and the Step 05
+component selector have all been removed. The `dataset` dropdowns that remain
+change only *what you look at*, never what runs.
+
+The 2D inversion runs are sequential rather than joint because `mpiEminvTE2d`
+applies a single `source_type` per run — but that is one action over the whole
+matrix, not a choice you make dataset by dataset.
 
 The historical layout is preserved exactly: one broadband run with a single
 source still writes straight into `workspace/2D/forward/` with

@@ -472,7 +472,14 @@ def run_calibration(fwd_dir: Path | str, *, method: str, nproc: int = 6,
     )
     cal["fdtd_wall_s"] = timing["wall_s"]
     if save_to_metadata:
-        save_calibration_to_metadata(meta_path, cal)
+        written = save_calibration_to_metadata(meta_path, cal)
+        # Surfaced rather than swallowed: a batch loop is exactly where a
+        # mixed-Earth-model file gets built without anyone noticing.
+        warn = written.get("calibration_consistency_warning")
+        if warn:
+            cal["consistency_warning"] = warn
+            if verbose:
+                print(f"[cal ] WARNING: {warn}")
     if verbose:
         print(format_calibration_table(cal))
     return cal
@@ -530,6 +537,8 @@ def run_calibration_matrix(out_root: Path | str, *, method: str, nproc: int = 6,
                                       verbose=verbose)
                 entry["cal"] = cal
                 entry["ok"] = True
+                if cal.get("consistency_warning"):
+                    entry["warning"] = cal["consistency_warning"]
             except Exception as exc:                      # noqa: BLE001
                 entry["ok"] = False
                 entry["error"] = f"{type(exc).__name__}: {exc}"
@@ -545,6 +554,9 @@ def run_calibration_matrix(out_root: Path | str, *, method: str, nproc: int = 6,
         for r in results:
             if not r.get("ok"):
                 print(f"  FAILED {r['name']} [{r['source_field']}]: {r['error']}")
+        for r in results:
+            if r.get("warning"):
+                print(f"  WARNING {r['name']} [{r['source_field']}]: {r['warning']}")
     return results
 
 
@@ -668,16 +680,30 @@ def load_manifest(out_root: Path | str) -> dict:
 # Hxrecord and Hzrecord true), so the ONLY thing that needs to vary between
 # runs is source_type - and the frequency-dependent grid, if the band is split.
 #
-# BACKWARD COMPATIBILITY. `split_by_frequency=False` with a single source
-# reproduces the historical layout exactly: one dataset written directly into
-# `out_root`, with `setup_metadata.json` where every existing notebook expects
-# it. That is the A/B path Task 2 asks to keep. Any other combination writes
-# one SUBDIRECTORY per dataset plus a `manifest.json`, because there is then no
-# single dataset that could honestly be called "the" one.
+# THERE IS NO BROADBAND RUN. Every dataset is one frequency and one source:
+# spatial sampling is set by the HIGHEST tone and record length by the LOWEST,
+# so a broadband run applies the fine grid of the top tone through the long
+# record of the bottom one and pays for both. Measured on this survey: 312.1 s
+# split against 621.9 s broadband, i.e. 1.99x serially and up to 5.84x
+# concurrently.
+#
+# Each dataset therefore gets its own dx/dt/eps_r, its own single-tone wavelet
+# and its own C - and the whole matrix is always built, modelled, calibrated and
+# inverted TOGETHER. Nothing downstream offers a per-dataset action, because
+# then the operator has to carry the matrix in their head and can leave the
+# workspace half-processed or mixed across Earth models.
+#
+# Reading a legacy single-dataset workspace still works: `iter_datasets` falls
+# back to treating `out_root` itself as one dataset. That is a READER for data
+# already on disk, not a way to create one.
 
 
 def dataset_name(freq_hz: Optional[float], source_field: str) -> str:
-    """Directory name for one (frequency, source) dataset."""
+    """Directory name for one (frequency, source) dataset.
+
+    `freq_hz=None` only ever names a LEGACY broadband dataset already on disk;
+    nothing builds one any more.
+    """
     src = str(source_field).lower()
     return f"{'broadband' if freq_hz is None else f'f{freq_hz:.0f}Hz'}_{src}"
 
@@ -686,15 +712,15 @@ def build_forward_matrix(
     out_root: Path | str,
     p: SetupParams,
     *,
-    split_by_frequency: bool = True,
     source_fields: Sequence[str] = ("HX", "HZ"),
     verbose: bool = True,
 ) -> dict:
     """Build every (frequency, source) forward dataset and a manifest.
 
-    Returns the manifest. When the result is a single dataset in the historical
-    layout, ``manifest["single_dataset"]`` is True and ``out_root`` itself is
-    that dataset's directory.
+    ALWAYS one dataset per frequency per source - see the note above. The
+    ``split_by_frequency`` switch is gone: a broadband run is strictly more
+    expensive and produces a grid that suits neither end of the band, so it is
+    not an option the workshop offers.
     """
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -706,19 +732,16 @@ def build_forward_matrix(
     if not sources:
         raise ValueError("At least one source component must be selected.")
 
-    freqs: list[Optional[float]] = (
-        [float(f) for f in p.flist_hz] if split_by_frequency else [None]
-    )
-    single = (len(freqs) == 1 and freqs[0] is None and len(sources) == 1)
+    freqs = [float(f) for f in p.flist_hz]
+    if not freqs:
+        raise ValueError("flist_hz is empty - Step 01 must specify at least one tone.")
 
     runs: dict[str, dict] = {}
     for f in freqs:
         for src in sources:
-            sub = replace(p, source_field=src)
-            if f is not None:
-                sub = replace(sub, flist_hz=(f,), f_min_hz=f, f_max_hz=f)
+            sub = replace(p, source_field=src, flist_hz=(f,), f_min_hz=f, f_max_hz=f)
             name = dataset_name(f, src)
-            run_dir = out_root if single else out_root / name
+            run_dir = out_root / name
             runs[name] = {
                 "run_dir": str(run_dir),
                 "freq_hz": f,
@@ -727,10 +750,7 @@ def build_forward_matrix(
             }
 
     manifest = {
-        "mode": ("single" if single else
-                 ("per_frequency_per_source" if split_by_frequency else "per_source")),
-        "single_dataset": single,
-        "split_by_frequency": bool(split_by_frequency),
+        "mode": "per_frequency_per_source",
         "source_fields": sources,
         "flist_hz": [float(v) for v in p.flist_hz],
         "n_datasets": len(runs),
@@ -740,9 +760,8 @@ def build_forward_matrix(
     if verbose:
         total_nt = sum(r["meta"]["nt_model"] for r in runs.values())
         print(f"[matrix] {len(runs)} dataset(s) under {out_root} "
-              f"({len(freqs)} frequency group(s) x {len(sources)} source(s)); "
-              f"total nt across runs = {total_nt:,}"
-              + ("  [historical single-dataset layout]" if single else ""))
+              f"({len(freqs)} frequency(ies) x {len(sources)} source(s)); "
+              f"total nt across runs = {total_nt:,}")
     return manifest
 
 
