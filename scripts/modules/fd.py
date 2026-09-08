@@ -342,7 +342,6 @@ def update_modcfg_for_workshop(
     aperty_m=None,
     sg_path=None,
     ep_path=None,
-    an_path=None,
     wavelet_path=None,
     survey_path=None,
     pml_kmax=None,
@@ -360,8 +359,6 @@ def update_modcfg_for_workshop(
         updates["Sg"] = str(sg_path)
     if ep_path is not None:
         updates["Ep"] = str(ep_path)
-    if an_path is not None:
-        updates["A"] = str(an_path)
     if wavelet_path is not None:
         updates["Wavelet"] = str(wavelet_path)
     if survey_path is not None:

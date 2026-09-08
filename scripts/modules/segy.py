@@ -288,15 +288,25 @@ def write_sg_ep_rss(
     ny_samples=1,
     dy=None,
     oy=0.0,
-    an_path=None,
 ):
     """Write conductivity (sg) and permittivity (ep) RSS files.
 
     `ep_value` is the uniform relative permittivity (eps_r) written to ep.rss.
     For the 2D explicit workflow this should be the FD design's `eps_r_used`.
 
-    For 2D modelling keep ny_samples=1. For 2.5D/3D workflows, set ny_samples>1
-    and optionally provide an_path to also write an anisotropy model of ones.
+    For 2D modelling keep ny_samples=1; for 3D set ny_samples>1.
+
+    NO ANISOTROPY FILE IS WRITTEN, for any dimension. rockem-suite's VTI model
+    is two INDEPENDENT optional ratios - `Aep = eps_h/eps_v` and
+    `Asg = sigma_h/sigma_v` - and an omitted key (or empty filename)
+    synthesises an all-ones array inside the engine, so an isotropic model
+    ships no anisotropy file at all. This function used to emit a ones-valued
+    `an.rss` for the retired single `A` key, which current rockem-suite
+    REJECTS with a fatal error rather than ignoring. The workshop is isotropic,
+    so the correct fix is to write nothing. Note if you ever add one: `Asg` is
+    a CONDUCTIVITY ratio, the reciprocal of the geophysical coefficient of
+    anisotropy rho_h/rho_v - the easiest thing here to get upside down coming
+    from a resistivity workflow.
     """
     sg = 1.0 / resistivity
     nz, nx = sg.shape
@@ -305,7 +315,6 @@ def write_sg_ep_rss(
     if ny > 1:
         sg = np.tile(sg, (1, ny, 1))
     ep = np.ones(sg.shape) * ep_value
-    an = np.ones(sg.shape)
     dy_eff = float(dx if dy is None else dy)
 
     outfile = rsfile(sg)
@@ -319,10 +328,6 @@ def write_sg_ep_rss(
 
     outfile.data = ep
     outfile.write(ep_path)
-
-    if an_path is not None:
-        outfile.data = an
-        outfile.write(an_path)
 
 
 __all__ = [
