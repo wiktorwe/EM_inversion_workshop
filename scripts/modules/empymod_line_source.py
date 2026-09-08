@@ -2,8 +2,14 @@
 
 Synthesises the 2D TE line source by numerically integrating `empymod.dipole`
 over the out-of-plane (y) axis: receiver fixed at y=0, Hx dipoles swept along
-y'. Matches rockem-suite's native `magnetic_line_source_fields_layered` after
-a uniform sign flip (see `greens_layered_2d_empymod_check.py` in rockem-suite).
+y'. Matches rockem-suite's native `magnetic_line_source_fields_layered` exactly,
+after the source-polarity sign flip derived and measured at `_EMPY_LINE_SIGN`
+below (see also `greens_layered_2d_empymod_check.py` in rockem-suite).
+
+The default `n_y=120` quadrature is NOT accurate enough to verify that: it
+leaves up to 14 % error at the near offsets. Raise `n_y` and `y_max_m`
+(and grade the grid toward y=0) before drawing any convention conclusion from
+a comparison against this module.
 
 NOT for production inversion loops — ~35-50x slower than the native kx-domain
 solver. Intended only as a fallback when the analytic solver rejects a model
@@ -19,8 +25,44 @@ import numpy as np
 from scripts.modules.analytic_1d_forward import Layer1D, layers_from_rho_thk
 from scripts.modules.rockem_bridge import model
 
-# empymod ab=44/64 y-integrated line response matches the native 2D Kx line-
-# source solver in amplitude but with a uniform pi phase flip.
+# Sign convention, DERIVED and then MEASURED - not an empirical fudge.
+#
+# Derivation. rockem codes Faraday's law as (WavesEmTE2D::forwardstepHfield /
+# insertPhysicalSource)
+#       mu dH/dt = -curl E + K        =>   curl E + i*omega*mu*H = +K
+# so its magnetic line source K enters with a PLUS sign. empymod follows
+# Hunziker et al. (2015), which writes
+#       curl E + z_hat*H = -J^m
+# i.e. the magnetic source enters with a MINUS sign; empymod's own
+# `utils.check_ab` carries the matching relation in-source as
+#       G^mm_ab(s, r, e, z) = -G^ee_ab(s, r, -z, -e).
+# Hence K = -J^m and the two codes' responses to the same numerical source
+# strength differ by exactly the real factor -1.
+#
+# This is a SOURCE-POLARITY convention, not a time convention. A time-convention
+# mismatch (exp(+i w t) vs exp(-i w t)) would show up as complex CONJUGATION,
+# which an amplitude-only comparison cannot distinguish from agreement - the
+# mistake that has already cost time on this codebase. So the check below was
+# done on COMPLEX values.
+#
+# Measurement (3-layer stack 30/5/80 Ohm-m, tx 100 m, rx 115 m, offsets
+# +-13.1/25.3 m, 1 and 4 kHz), taking the raw empymod/native complex ratio with
+# this constant set to +1 and a converged y-quadrature (graded grid,
+# y_max = 60 km, 6000 points):
+#
+#       ratio = -1.000011 - 0.000002j  ...  -0.999993 - 0.000005j
+#
+# i.e. exactly -1 to 1e-5, with zero imaginary part, and FLAT in frequency,
+# offset, receiver depth and component (both Hx and Hz). The conjugate ratio is
+# nowhere near -1, confirming it is not a time-convention flip. The coarse
+# default quadrature (n_y=120) is what made an earlier check look like a "uniform
+# pi phase flip with amplitude agreement" rather than an exact -1: at n_y=120 the
+# near-offset integrand is under-resolved by up to 14 %.
+#
+# Independent corroboration that the sign belongs on the EMPYMOD side, not the
+# native one: the workshop's FDTD-vs-analytic calibration fits C = FDTD/native
+# and gets a phase of +0.02 to -0.12 deg, not 180 deg - so the native solver
+# already agrees in polarity with rockem's own engine.
 _EMPY_LINE_SIGN = -1.0
 
 
