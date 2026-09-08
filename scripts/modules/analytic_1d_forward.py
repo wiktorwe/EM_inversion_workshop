@@ -26,7 +26,19 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from scripts.modules.rockem_bridge import GreensSolverError, magnetic_line_source_fields_layered
+from scripts.modules.rockem_bridge import (
+    GreensSolverError,
+    magnetic_line_source_fields_layered,
+    magnetic_z_line_source_fields_layered,
+)
+
+# Analytic line-source solver per TE2D source component. Both return
+# ``(Ey, Hx, Hz)`` per unit source and share signature, cost and guarantees.
+# HX = Kx (source_type=3), HZ = Kz (source_type=5).
+_SOURCE_SOLVERS = {
+    "HX": magnetic_line_source_fields_layered,
+    "HZ": magnetic_z_line_source_fields_layered,
+}
 
 _CONTRASTED_INTERFACE_MSG = "contrasted layer interface"
 
@@ -169,10 +181,18 @@ def forward_1d_gains(
     eps_r: float,
     n_nodes: int = 120,
     lam_max: Optional[float] = None,
+    source_field: str = "HX",
     allow_empymod_fallback: bool = False,
     stats: Optional[Dict[str, bool]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Complex (Hx, Hz) channel gain per unit Kx source, shape [nfreq, nrx].
+    """Complex (Hx, Hz) channel gain per unit source, shape [nfreq, nrx].
+
+    ``source_field`` selects which magnetic line source is modelled: ``"HX"``
+    (Kx, the TE2D engine's ``source_type=3``) or ``"HZ"`` (Kz,
+    ``source_type=5``). It MUST match the source that produced the data being
+    fitted. This used to be hardcoded to Kx, so feeding it Kz data modelled the
+    wrong source silently - the same class of error as an inversion cfg whose
+    ``source_type`` does not match its shot gather, but with no cfg to inspect.
 
     `rx_depth_m` may be a SCALAR (all receivers at one depth) or a PER-RECEIVER
     array matching `off_x`, exactly like `fdtd_analytic_calibration`'s
@@ -232,6 +252,13 @@ def forward_1d_gains(
     If `stats` is provided, it receives `stats["empymod_fallback"]=True` when
     any frequency used the fallback.
     """
+    source_field = str(source_field).upper()
+    if source_field not in _SOURCE_SOLVERS:
+        raise ValueError(
+            f"source_field must be one of {sorted(_SOURCE_SOLVERS)}, got {source_field!r}"
+        )
+    solver = _SOURCE_SOLVERS[source_field]
+
     rho = np.asarray(rho, dtype=float).reshape(-1)
     thickness = np.asarray(thickness, dtype=float).reshape(-1)
     freqs_hz = np.asarray(freqs_hz, dtype=float).reshape(-1)
@@ -264,7 +291,7 @@ def forward_1d_gains(
         for depth in np.unique(rx_depths):
             mask = rx_depths == depth
             try:
-                _, hx_f, hz_f = magnetic_line_source_fields_layered(
+                _, hx_f, hz_f = solver(
                     off_x[mask], float(f), layers, float(tx_depth_m), rx_depth_m=float(depth),
                     n_nodes=n_eff, lam_max=lam_eff,
                 )
