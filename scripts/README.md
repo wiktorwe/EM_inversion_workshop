@@ -56,6 +56,16 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   `mod.cfg` update helpers.
 - `fd_visualization.py`: FD shot-gather loading and steady-state
   phasor-ratio channel-gain extraction (`compute_gains_for_fd_outputs`).
+  Windows the trace and the injected wavelet on the same ABSOLUTE time interval
+  and corrects the residual sub-sample offset exactly. This is not cosmetic:
+  production records are written at `dtrec` (1e-5 s) while the wavelet is written
+  at the model `dt` (2.5e-8 s), so "the last N samples" of each start up to one
+  `dtrec` apart - which put a frequency-proportional phase error of up to 21.6
+  degrees into every production gain, plus ~173 degrees of period-quantisation
+  aliasing at 6 kHz. `C(f)` could not absorb it because the calibration runs
+  write `dtrec = dt_model`, where the offset is identically zero. Fixing it took
+  the true model's chi-squared from 381.8 to 0.028. See
+  `doc/numerics_findings.md` section 2b.
 - `fdtd_analytic_calibration.py`: global FDTD–analytic scale `C(f)` for
   Steps 05/06. Notebook 02 offers two Earth models (last successful run wins
   in `setup_metadata.json`): homogeneous `rho_min` (receivers at ±depth so Hz
@@ -68,9 +78,41 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   inversion and by FDTD–analytic calibration. Replaces `empymod_1d_forward.py`
   (below).
 - `inversion_tuning.py`: single-Tx DE budget and Tikhonov λ L-curve helpers
-  used by Step 05 (parallel over seeds / λ values on the QC transmitter).
+  used by Step 05 (parallel over seeds / λ values on the QC transmitter). Its
+  model parameterisation, bounds and per-Tx forward now come from
+  `inversion_1d` rather than being a third verbatim copy - that copy had gone
+  stale (it still forced every receiver to the first receiver's depth after the
+  notebook was fixed), which is the concrete cost of duplicating a misfit.
 - `inversion.py`: 2D inversion input preparation and `inv.cfg` writing
-  helpers, used by `03_2d_inversion`.
+  helpers, used by `03_2d_inversion`. `prepare_inversion_inputs` pins
+  `order`/`lpml`/`pml_*` from the forward run's `mod.cfg`, so the FWI's
+  re-modelled wavefield can never drift from the data it is fitting. (The
+  `apertx = "60"` in `templates/inv.cfg` is only a template fallback: notebook
+  03's widget defaults to the forward run's own `apertx_m`, 110.6 m for the
+  shipped survey.)
+- `inversion_1d.py`: the 1D layered model parameterisation and complex-gain
+  misfit (`unpack_model_params`, `forward_analytic_for_tx`,
+  `complex_gain_objective`, `build_bounds`). These used to live inside
+  `05_1d_inversion.ipynb`'s single code cell, which made them unreachable from
+  any script; the notebook now imports them. `complex_gain_objective` takes a
+  `freq_mask`, which is what makes one stage of a multi-scale frequency ladder
+  a slice rather than a rewrite - per-frequency `sigma_hx`/`sigma_hz`/`C` are
+  sliced with the same mask, so each stage gets that frequency's own
+  calibration scatter instead of a band-averaged one.
+- `multiscale_2d.py`: the frequency-ladder machinery for 2D FWI over Task 2's
+  per-frequency grids - the grid handoff (`resample_model_log_rho`, which
+  interpolates in **log resistivity** and writes an inspectable `.rss`;
+  `verify_roundtrip`, which checks the operator on the known true model first)
+  and the schedules (`stage_knot_spacing` scales the B-spline `dtx`/`dtz` with
+  skin depth; `stage_regularisation` relaxes the Tikhonov weight as frequency
+  rises, anchored so the final stage matches the single-stage baseline).
+- `headless.py`: non-GUI drivers for the Step 01/02 pipeline
+  (`SetupParams`, `build_forward_inputs`, `build_per_frequency_forward_inputs`,
+  `run_forward`, `run_calibration`). Every numerical decision is delegated to
+  the same helpers the notebooks call - this is a driver, not a second
+  implementation. Verified to reproduce notebook 01's `sg.rss`/`ep.rss`/
+  `wav2d.rss`/`Survey.rss` byte-for-byte. Used by everything under
+  `scripts/experiments/`.
 - `empymod_1d_forward.py`: **legacy** - the pre-redesign empymod-based 1D
   point-dipole forward. No longer imported by any of the six workshop
   notebooks; kept only because the vendored `third_party/empy_blockinv`
@@ -94,6 +136,53 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   reads the forward engine from `setup_metadata.json`; Step 03 patches
   `runinv.sh` from the template via `patch_runinv_template()`.
 - `clean.sh`: removes generated FD/inversion outputs from a run directory.
+
+## `scripts/experiments/`
+
+Measurement scripts. Each one states a hypothesis and reports the number that
+confirms or falsifies it; none of them are imported by the notebooks.
+
+- `order_refinement.py`: separates a CONSISTENCY error from a DISCRETISATION
+  error by measuring `C(f)` at two grid spacings for two stencil orders. A
+  consistency error does not converge under refinement; a truncation error falls
+  like `dx^2`. This is the evidence behind `order = "6"`.
+- `production_timing.py`: measured (not estimated) wall-clock cost of the
+  order-2 -> order-6 change on a full 30-transmitter production run.
+- `per_frequency_cost.py`: recomputes the per-frequency vs broadband design cost
+  from `design_explicit_fd` rather than trusting a table, with and without the
+  `eps_r` cap.
+- `per_frequency_ab.py`: runs the calibration once per frequency on that
+  frequency's own grid and checks it reproduces the broadband table; also tests
+  the phase reference (analysis-window shift invariance) and measures the
+  per-frequency interface quantisation.
+- `hz_source.py` / `fault_couplings.py`: the Kz (`source_type=5`) source -
+  calibration against `magnetic_z_line_source_fields_layered`, the Lorentz
+  reciprocity check on the layered Earth, and the 2x2 coupling matrix plus
+  cross-term null across the fault. `fault_couplings` warns when the farthest
+  transmitters show no variation at all, which means the target lies outside
+  `apertx/2` and any "detection distance" is the aperture rather than physics.
+- `lookahead.py`: the corrected look-ahead measurement - `apertx` sized from the
+  look-ahead range instead of the survey offsets, an extended transmitter line,
+  per-frequency grids, and a background taken from a SECOND laterally invariant
+  model (`examples/Fault_1_nofault.sgy`) rather than from far transmitters,
+  which would be circular. Writes a per-frequency figure of all four couplings
+  and the cross-term sum vs tool position; `--plot-only` re-draws it from the
+  saved JSON without re-running any FDTD.
+- `multiscale_1d.py`: the frequency-ladder schedule prototyped in 1D (seconds
+  per inversion) before spending 2D FWI time on it. Judges strategies on data
+  misfit over ALL frequencies and on model error against the known truth.
+- `kx_convergence.py`: whether the analytic solver's `kx` quadrature is
+  converged on the actual `Fault_1.sgy` resistivity range - testing the
+  `lam_max` (truncation) leg, not just `n_nodes`, which is blind to it.
+- `eps_r_bias.py`: the artificial-permittivity bias the calibration cannot see,
+  measured by evaluating the analytic solver at `eps_r_used` and at a physical
+  `eps_r`.
+
+## `scripts/dev/`
+
+- `nbedit.py`: exact-match editor for the notebooks' single large code cells.
+  Each edit declares how many occurrences it expects and fails loudly if the
+  count is wrong, so a stale edit cannot silently do nothing.
 
 Other utilities:
 

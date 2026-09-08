@@ -183,13 +183,177 @@ Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
    - Step 05 defaults freqs / `n_periods` / rho bounds from setup metadata; each run writes `REPORT.md`.
    - Step 06 loads a run and shows its parameters (freqs, weights, optimizer) from that report.
 
-## 6) Documentation
+## 6) Modelling notes and limitations
+
+### Anisotropy: TE2D takes no anisotropy input, and correctly needs none
+
+This workshop is **isotropic**, and on the 2D TE engine it drives that is not a
+simplification you can lift — it is structural.
+
+`ModelEmTE2D`'s constructor is `(Sgfile, Epfile, lpml)`: there is no anisotropy
+argument. That is correct rather than an omission. TE2D's only electric-field
+component is `Ey`, which is **horizontal**, so the field only ever sees the
+horizontal material properties `Asg*Sg` and `Aep*Ep`. A VTI ratio is therefore
+exactly degenerate with `Sg` and `Ep` themselves: any anisotropic model produces
+a field identical to some isotropic one, so anisotropy is **unresolvable** in
+this engine, not merely unmodelled. `rockem.config.write_te2d_config` documents
+the same thing.
+
+The practical consequence: **VTI is not out of scope for this workshop, it is
+unrepresentable in the engine the workshop uses.** Anyone who needs it must move
+to `TM2D` (`Ex, Ez, Hy` — the extraordinary branch, which does see the vertical
+properties) or to 3D. Do not spend time trying to add an anisotropy file to the
+2D TE path.
+
+For the engines that *do* take anisotropy (`ModelEmTM2D`, `ModelEm3D`),
+rockem-suite's model is **two independent optional ratio fields**, not the single
+legacy key:
+
+| key   | meaning                                    |
+|-------|--------------------------------------------|
+| `Aep` | `eps_h / eps_v` — dielectric anisotropy     |
+| `Asg` | `sigma_h / sigma_v` — conductivity anisotropy |
+
+Both are optional: an omitted key (or an empty filename) makes rockem synthesise
+an all-ones array, so **an isotropic model ships no anisotropy file at all**.
+This workshop therefore writes none, for any dimension.
+
+Two traps worth stating plainly:
+
+- The old single `A` key (which applied to permittivity *and* conductivity) is
+  now **rejected with a fatal error**, not ignored. The workshop's `mod3d.cfg`
+  used to set it, which made the 3D path fail outright on a current
+  rockem-suite; that key is gone.
+- **`Asg` is a conductivity ratio**, i.e. the *reciprocal* of the geophysical
+  coefficient of anisotropy `rho_h / rho_v`. This is the easiest thing in the
+  codebase to get upside down coming from a resistivity workflow.
+
+### Two magnetic source components: Kx and Kz
+
+The workshop used to hardcode a single **Kx** magnetic line source
+(`source_type = "3"`). Both receiver components were already recorded, so a
+second run with **Kz** (`source_type = "5"`) completes the full 2×2 magnetic
+coupling matrix:
+
+| | records Hx | records Hz |
+|---|---|---|
+| **Kx source** | `Cxx` (coaxial, strong) | `Cxz` (cross) |
+| **Kz source** | `Czx` (cross) | `Czz` (transverse, strong) |
+
+The source component is now a parameter everywhere — a **cal source** dropdown
+in Step 02, `source_field` in `scripts.modules.headless.SetupParams`, and an
+argument on every calibration entry point. Each source gets its own run
+directory and its own fitted `C(f)`; both are stored under
+`fdtd_analytic_calibration_by_source` in `setup_metadata.json`, while the
+*active* `C` that notebooks 05/06 consume stays the **Kx** one (the 1D
+inversion's forward model is a Kx line source, so handing it a Kz `C` would
+silently calibrate the wrong source).
+
+Two reasons this is worth the extra run:
+
+1. **Any tilt, for free.** A tilted magnetic line source is an exact
+   superposition `cos(θ)·Kx + sin(θ)·Kz`, and a tilted receiver coil is
+   `cos(θ)·Hx + sin(θ)·Hz` — see `tilted_magnetic_line_source_fields_layered`
+   and `project_tilted_h`. Two FDTD runs therefore buy the entire in-plane tilt
+   space at zero marginal cost per configuration. (Out-of-plane tilt is **not**
+   representable: a Ky moment drives the TM mode, a different field triple
+   entirely.)
+2. **A null background to look for structure against.** At the survey's zero
+   depth offset, Lorentz reciprocity plus the odd-in-offset parity of the cross
+   components forces
+
+   ```
+   Hz(Kx@p)  =  −Hx(Kz@p)      for the same source position and the same receiver
+   ```
+
+   in **any** laterally-invariant Earth (verified to 5e-16 on a 3-layer stack;
+   the identity does *not* hold once the receiver is at a different depth, so it
+   is specific to this colinear geometry). Their sum `S = Cxz + Czx` is
+   therefore identically zero in the background model and non-zero **only** where
+   lateral structure breaks the symmetry — the fault appears against nothing
+   rather than as a small perturbation on a large direct coupling.
+   `scripts/experiments/fault_couplings.py` measures the tool-to-fault distance
+   at which each observable leaves its background by more than the calibration
+   scatter.
+
+### Extraction window must exclude the source ramp-up
+
+`n_periods_extract` in `setup_metadata.json` is **not** the wavelet's own
+`n_periods`, and this matters more than it looks.
+
+The source is a ramped CW wavelet (`Ramp_sqw`), whose ramp lasts `alpha / f_min`
+seconds — half a period of the lowest tone at the shipped `alpha = 0.5`.
+`steady_state_phasor` analyses only the **last** `n_periods` periods precisely so
+that this startup transient is excluded. Asking for `n_periods_extract` equal to
+the wavelet's `n_periods` asks for the *whole record*, which defeats that
+protection: the ramp leaks into every phasor, frequency-dependently, and shows up
+as an apparent physics drift.
+
+Measured on the workshop's own calibration (order 6, homogeneous Earth,
+1–6 kHz): `|C|/dx²` drifts **0.230 %** across the band with the full-record
+window and **0.023 %** once the ramp is excluded — a factor of ten. A
+non-integer window is worse still (0.538 % at 4.5 periods), because it holds a
+non-integer number of periods of some tones and leaks between them.
+
+Step 01 now writes the largest safe *integer* window
+(`n_periods_extract_safe = n_periods − ceil(alpha)`, i.e. 4 for the shipped
+defaults), and `steady_state_gains` warns if it is ever asked for a window as
+long as the record.
+
+### Channel gains are windowed on absolute time, not "the last N samples"
+
+The production shot record is written at `dtrec` (1×10⁻⁵ s by default) while the
+injected wavelet is written at the model `dt` (2.5×10⁻⁸ s). Their records are
+therefore **different lengths on different sample grids**, so taking "the last
+N samples" of each — which is what `steady_state_phasor` does unaided — makes
+the two analysis windows start up to one `dtrec` apart in absolute time.
+
+That is a pure time shift, so it appears as a phase error **proportional to
+frequency**, and it does *not* cancel in the trace/wavelet ratio. Critically,
+`C(f)` cannot absorb it either: the calibration runs write
+`dtrec = dt_model`, where trace and wavelet have identical length and the offset
+is exactly zero. The bug therefore lived only on the path from production data
+to the 1D inversion, and every check that might have caught it ran on the
+geometry where it does not exist.
+
+Measured before the fix, on a transmitter far from the fault where the Earth is
+essentially 1D: −3.5° / −7.3° / −14.2° at 1 / 2 / 4 kHz, plus a further ~173° at
+6 kHz from `round(1/f/dt)` giving 17 samples per period instead of 16.67. The
+**true** model scored a chi-squared of 381.8 — worse than the models the
+inversion was finding.
+
+`steady_state_gains` now windows both series on the same absolute interval and
+applies the exact residual sub-sample correction. The true model's chi-squared
+went 381.8 → 0.028, and `C(f)` is unchanged to five digits. Any 1D inversion run
+produced before this is not comparable with one produced after; the 2D FWI is
+unaffected, since it fits time-domain traces and never goes through the phasor
+extraction.
+
+### The 3D path is legacy and unvalidated
+
+`mod3d.cfg` / `mpiEmmodADI3d` predate the 2D redesign and are not covered by any
+of the validation in this workshop. Its config keys are now correct (it no
+longer errors on startup), but no Green's-function check has been run against
+it here. Treat 2D TE as the supported path.
+
+### Finite-difference stencil order
+
+`order` in `mod.cfg` / `inv.cfg` is **6**, not 2. rock-em's tabulated staggered
+first-derivative coefficients are dispersion-optimised (Holberg-type), not
+Taylor-exact, and at order 2 they violate the consistency condition
+`sum_n c_n (2n+1) = 1` by **−2.3 %** — so every first derivative is under-scaled
+by that amount *regardless of dx*, an error that does not converge away under
+grid refinement. See the comment block at the top of
+[`scripts/templates/mod.cfg`](scripts/templates/mod.cfg) for the measurements,
+and `scripts/experiments/` for the scripts that produced them.
+
+## 7) Documentation
 
 - Full GUI guide with parameter descriptions: [`doc/gui_manual.pdf`](doc/gui_manual.pdf) (build from [`doc/gui_manual.tex`](doc/gui_manual.tex) — see [`doc/README.md`](doc/README.md))
 - Example model: [`examples/Fault_1.sgy`](examples/Fault_1.sgy)
 - Module reference: [`scripts/README.md`](scripts/README.md)
 
-## 7) Troubleshooting
+## 8) Troubleshooting
 
 - If a step reports missing setup data, run Step 01 first and finalize setup.
 - If modelling cannot start, verify:

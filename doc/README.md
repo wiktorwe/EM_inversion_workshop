@@ -9,6 +9,7 @@
 | [`gui_manual.pdf`](gui_manual.pdf) | Built PDF manual |
 | [`../examples/README.md`](../examples/README.md) | Example resistivity model (`Fault_1.sgy`) |
 | [`../scripts/README.md`](../scripts/README.md) | Python modules and templates |
+| [`numerics_findings.md`](numerics_findings.md) | Measured numerical findings: FD stencil order, extraction window, kx quadrature, interface quantisation, eps_r bias - and what was deliberately left alone |
 
 ## Building the GUI manual (PDF)
 
