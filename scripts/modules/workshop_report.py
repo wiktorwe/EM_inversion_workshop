@@ -421,6 +421,12 @@ def collect_fw_rows(ctx: ReportContext) -> list[tuple[str, list[tuple[str, Any]]
                 ("f_min (Hz)", meta.get("f_min_hz")),
                 ("f_max (Hz)", meta.get("f_max_hz")),
                 ("n_periods_extract", meta.get("n_periods_extract")),
+                # Reported next to the wavelet's own n_periods because the two
+                # must NOT be equal: an extraction window as long as the record
+                # includes the source ramp-up and biases every phasor (see
+                # doc/numerics_findings.md).
+                ("wavelet n_periods", meta.get("wavelet_n_periods")),
+                ("wavelet ramp (s)", meta.get("wavelet_ramp_seconds")),
                 ("Wavelet dt (s)", meta.get("dt_wavelet_s")),
                 ("Wavelet file", meta.get("forward_wavelet")),
             ],
@@ -428,6 +434,8 @@ def collect_fw_rows(ctx: ReportContext) -> list[tuple[str, list[tuple[str, Any]]
         (
             "Survey geometry",
             [
+                ("source component", meta.get("source_field")),
+                ("source_type", meta.get("source_type")),
                 ("ntx", meta.get("ntx") or survey_cfg.get("nsx")),
                 ("nrx", meta.get("nrx") or survey_cfg.get("ngx")),
                 ("tx0 (m)", meta.get("tx0_m") or survey_cfg.get("sx0")),
