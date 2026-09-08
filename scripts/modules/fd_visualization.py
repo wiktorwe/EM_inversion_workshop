@@ -13,6 +13,7 @@ that ratio - no time-derivative, no phase correction constants needed.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -95,6 +96,28 @@ def build_trace_index(src_x, src_z, rx_x, rx_z, decimals=6):
     }
 
 
+def _aligned_window(x, dt, t_start_s, duration_s):
+    """Samples of `x` covering ``[t_start, t_start + duration]``, plus the ACTUAL
+    absolute time of the first sample returned.
+
+    Sample k of a series sampled at `dt` sits at absolute time ``k*dt``. Slicing
+    "the last N samples" instead - which is what `steady_state_phasor` does on
+    its own - implicitly assumes every series ends at the same absolute time.
+    That is false here: the production shot record is written at `dtrec` while
+    the wavelet is written at the model `dt`, so their durations differ by up to
+    one `dtrec`.
+
+    `steady_state_phasor` builds its own time axis as ``arange(n)*dt``, i.e. it
+    references phase to the FIRST sample of whatever it is given. So the window
+    STARTS are what must agree, and the returned start time lets the caller
+    correct the sub-sample remainder exactly.
+    """
+    n = len(x)
+    i0 = max(0, min(n - 1, int(round(t_start_s / dt))))
+    i1 = min(n, i0 + max(2, int(round(duration_s / dt))))
+    return x[i0:i1], i0 * dt
+
+
 def steady_state_gains(traces_data, dt, wavelet, wavelet_dt, freqs, f_min_hz, n_periods_extract=3.0):
     """Complex channel gain (`trace_phasor / wavelet_phasor`) per (freq, trace).
 
@@ -114,21 +137,64 @@ def steady_state_gains(traces_data, dt, wavelet, wavelet_dt, freqs, f_min_hz, n_
     traces = np.asarray(traces_data, dtype=float)
     if traces.ndim != 2:
         raise ValueError("traces_data must be 2D [nt, ntrace].")
+
+    # The window must be strictly shorter than the record, or
+    # `steady_state_phasor`'s "use only the LAST n_periods" transient skip is
+    # defeated and the ramped CW source's startup leaks into every phasor -
+    # frequency-dependently, so it shows up as an apparent physics drift.
+    # Measured on this workshop's own calibration: 0.230 % vs 0.023 % drift in
+    # |C|/dx^2 across 1-6 kHz. See `source.create_wavelet_rss`'s
+    # `n_periods_extract_safe`.
+    _wav_duration_s = float(len(np.asarray(wavelet).reshape(-1))) * float(wavelet_dt)
+    _window_s = float(n_periods_extract) / float(f_min_hz)
+    if _window_s >= _wav_duration_s - 1e-15:
+        warnings.warn(
+            f"n_periods_extract={n_periods_extract:g} of f_min={f_min_hz:g} Hz asks for a "
+            f"{_window_s*1e3:.3f} ms window from a {_wav_duration_s*1e3:.3f} ms record - the "
+            "whole record. steady_state_phasor can then no longer skip the source's "
+            "ramp-up, and the extracted gains pick up a frequency-dependent bias. Use "
+            "setup_metadata's n_periods_extract (Step 01 writes the largest safe integer) "
+            "or reduce it by at least the ramp length.",
+            RuntimeWarning, stacklevel=2,
+        )
     nt, ntrace = traces.shape
     freqs = np.asarray(freqs, dtype=float)
     wavelet = np.asarray(wavelet, dtype=float).reshape(-1)
+
+    # Window BOTH series on the same ABSOLUTE time interval. The interval ends
+    # at the last instant they both cover and lasts `n_periods_extract` periods
+    # of `f_min` - one fixed duration shared by every tone, which is the point of
+    # the shared Hann window.
+    t_end = min((nt - 1) * float(dt), (wavelet.size - 1) * float(wavelet_dt))
+    duration = float(n_periods_extract) / float(f_min_hz)
+    t_start = t_end - duration
+    # A large n_periods makes steady_state_phasor's own "last N samples" clamp to
+    # the whole pre-trimmed window, so the alignment above is what decides it -
+    # and it sidesteps that function's `round(1/f/dt)` period quantisation, which
+    # at dtrec = 1e-5 and 6 kHz (16.67 samples per period, rounded to 17)
+    # stretches the window by 2 % and adds ~173 degrees of phase.
+    _WHOLE_WINDOW = 1e12
+    wav_win, wav_t0 = _aligned_window(wavelet, wavelet_dt, t_start, duration)
 
     gain = np.full((len(freqs), ntrace), np.nan, dtype=complex)
     for ifreq, freq in enumerate(freqs):
         if freq <= 0:
             continue
-        n_periods_freq = n_periods_extract * (freq / f_min_hz)
-        wav_phasor = steady_state_phasor(wavelet, wavelet_dt, freq, n_periods_freq)
+        wav_phasor = steady_state_phasor(wav_win, wavelet_dt, freq, _WHOLE_WINDOW)
         if wav_phasor == 0:
             continue
         for itr in range(ntrace):
-            tr_phasor = steady_state_phasor(traces[:, itr], dt, freq, n_periods_freq)
-            gain[ifreq, itr] = tr_phasor / wav_phasor
+            tr_win, tr_t0 = _aligned_window(traces[:, itr], dt, t_start, duration)
+            tr_phasor = steady_state_phasor(tr_win, dt, freq, _WHOLE_WINDOW)
+            # The two windows can still start up to half a sample apart, because
+            # each can only begin on its own grid (dtrec is 394x coarser than the
+            # model dt here). That residual is a KNOWN time offset, so correct it
+            # exactly rather than leaving it in: a phasor referenced to the
+            # window start relates to one referenced to absolute zero by
+            # exp(-i*2*pi*f*t0), so the ratio picks up exp(-i*2*pi*f*(t0_tr - t0_wav)).
+            gain[ifreq, itr] = (tr_phasor / wav_phasor) * np.exp(
+                -2j * np.pi * float(freq) * (tr_t0 - wav_t0)
+            )
 
     return {
         "nt": nt,
