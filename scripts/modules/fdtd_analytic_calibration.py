@@ -11,6 +11,23 @@ setup_metadata):
 1. Homogeneous ``rho_min`` — receivers at ±depth so Hx-source Hz is nonzero.
 2. Lateral average of production ``sg.rss`` resistivity (vertically varying 1D)
    with the production survey offsets / apertx from Step 01.
+
+Both Earth models can be calibrated for EITHER magnetic source component, and
+the component is a parameter everywhere rather than a hardcoded ``"HX"``:
+
+* ``source_field="HX"`` - the TE2D engine's ``source_type=3`` (Kx, coaxial /
+  along-tool), analytic counterpart ``magnetic_line_source_fields_layered``.
+* ``source_field="HZ"`` - ``source_type=5`` (Kz, transverse to bedding),
+  analytic counterpart ``magnetic_z_line_source_fields_layered``.
+
+Together the two runs complete the 2x2 magnetic coupling matrix
+(Hx,Hz recorded for each of the Kx,Kz sources), from which ANY tilted
+transmitter/receiver pair follows by exact superposition - see
+``rockem.greens.tilted_magnetic_line_source_fields_layered`` and
+``project_tilted_h``. Each source type gets its own run directory and its own
+fitted ``C(f)``; if the two need DIFFERENT ``C``, that is a source-normalisation
+bug, not physics (both inject through the same ``dt/MU`` coefficient into one
+cell, so both should give |C| ~ dx^2).
 """
 
 from __future__ import annotations
@@ -23,11 +40,12 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from scripts.modules.analytic_1d_forward import ForwardRejected, Layer1D
+from scripts.modules.analytic_1d_forward import ForwardRejected, Layer1D, resolve_quadrature
 from scripts.modules.rockem_bridge import (
     GreensSolverError,
     config as rockem_config,
     magnetic_line_source_fields_layered,
+    magnetic_z_line_source_fields_layered,
     model as rockem_model,
     survey as rockem_survey,
 )
@@ -39,6 +57,11 @@ CALIBRATION_SUBDIR_LATERAL = "calibration_lateral_average"
 CALIBRATION_CFG_NAME = "mod_cal.cfg"
 METHOD_HOMOGENEOUS = "homogeneous_rho_min"
 METHOD_LATERAL_AVERAGE = "lateral_average_true"
+# Magnetic source components the calibration can run. "HX" is the workshop's
+# historical (and still default) coaxial Kx line source; "HZ" is the transverse
+# Kz source added to complete the 2x2 magnetic coupling matrix.
+SOURCE_FIELDS = ("HX", "HZ")
+DEFAULT_SOURCE_FIELD = "HX"
 # Keep sources/receivers this many cells clear of the PML when the survey's own
 # aperture margin is unavailable (rockem-suite gotchas: 8-16 cells).
 MIN_PML_CLEARANCE_CELLS = 16
@@ -80,9 +103,28 @@ def _require_meta_fields(meta: Mapping[str, Any]) -> dict:
     return dict(meta)
 
 
-def calibration_run_dir(fwd_2d_dir: Path | str, method: str = METHOD_HOMOGENEOUS) -> Path:
+def calibration_run_dir(
+    fwd_2d_dir: Path | str,
+    method: str = METHOD_HOMOGENEOUS,
+    source_field: str = DEFAULT_SOURCE_FIELD,
+) -> Path:
+    """Run directory for one (Earth model, source component) calibration.
+
+    The Kx directory keeps its historical name so existing workspaces and the
+    workflow report keep resolving; Kz gets a ``_hz`` suffix so the two runs
+    coexist rather than overwriting each other.
+    """
     sub = CALIBRATION_SUBDIR_LATERAL if method == METHOD_LATERAL_AVERAGE else CALIBRATION_SUBDIR
+    if _check_source_field(source_field) != DEFAULT_SOURCE_FIELD:
+        sub = f"{sub}_hz"
     return Path(fwd_2d_dir) / sub
+
+
+def _check_source_field(source_field: str) -> str:
+    sf = str(source_field).upper()
+    if sf not in SOURCE_FIELDS:
+        raise ValueError(f"source_field must be one of {SOURCE_FIELDS}, got {source_field!r}")
+    return sf
 
 
 def calibration_rx_dz_m(meta: Mapping[str, Any]) -> float:
@@ -221,8 +263,20 @@ def _read_rss_conductivity_xz(path: Path | str) -> Tuple[np.ndarray, np.ndarray,
     iz = 2 if (len(f.geomN) > 2 and int(f.geomN[2]) > 0) else 1
     dz = float(f.geomD[iz]) if f.geomD[iz] else dx
     oz = float(f.geomO[iz])
-    x = ox + (np.arange(nx, dtype=float) + 0.5) * dx
-    z = oz + (np.arange(nz, dtype=float) + 0.5) * dz
+    # Samples sit AT `o + k*d`, NOT at cell centres `o + (k+0.5)*d`. This
+    # matters and was wrong here: the engine's own coordinate mapping
+    # (Geometry2D::makeMap) is `res = (coord - o)/d; pos = floor(res)` with
+    # bilinear weights from the remainder, so a coordinate equal to `o` maps
+    # exactly onto sample 0. `scripts.modules.rss_model.read_rss_model` - the
+    # reader notebooks 04/06 use for the same files - has always used
+    # `o + k*d`; this function used `o + (k+0.5)*d`, so the two readers
+    # disagreed by half a cell (0.4 m at the shipped dx) on the SAME file.
+    # Half a cell is not negligible here: moving a layer interface by 0.4 m
+    # changes |Hz| by up to ~4.9 % and |Hx| by ~2.3 % at 6 kHz on this survey
+    # (scripts/experiments/interface_snapping.py), i.e. at or above the 3 %
+    # uncertainty floor the inversion runs on.
+    x = ox + np.arange(nx, dtype=float) * dx
+    z = oz + np.arange(nz, dtype=float) * dz
     return x, z, np.asarray(data_xz, dtype=float)
 
 
@@ -321,12 +375,27 @@ def layers_from_lateral_average_for_window(
     return _blocky_layers_from_rho_trace(rho_win, dz=dz, eps_r=eps_r)
 
 
+def _analytic_solver(source_field: str):
+    """Analytic line-source solver matching a TE2D ``source_type``.
+
+    HX -> ``magnetic_line_source_fields_layered``  (Kx, source_type=3)
+    HZ -> ``magnetic_z_line_source_fields_layered`` (Kz, source_type=5)
+
+    Both return ``(Ey, Hx, Hz)`` per unit source and share signature, cost and
+    guarantees, so every caller below is component-agnostic.
+    """
+    if _check_source_field(source_field) == "HZ":
+        return magnetic_z_line_source_fields_layered
+    return magnetic_line_source_fields_layered
+
+
 def layered_analytic_gains(
     freqs_hz: Sequence[float],
     off_x: Sequence[float],
     tx_depth_m: float,
     rx_depth_m: float | Sequence[float],
     layers: Sequence[Layer1D],
+    source_field: str = DEFAULT_SOURCE_FIELD,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Complex (Hx, Hz) gains for a layered stack (same layers as FDTD)."""
     freqs_hz = np.asarray(freqs_hz, dtype=float).reshape(-1)
@@ -339,16 +408,22 @@ def layered_analytic_gains(
             f"rx_depth_m size {rx_depths.size} does not match off_x size {off_x.size}"
         )
 
+    solver = _analytic_solver(source_field)
     nfreq, nrx = freqs_hz.size, off_x.size
     hx = np.full((nfreq, nrx), np.nan, dtype=complex)
     hz = np.full((nfreq, nrx), np.nan, dtype=complex)
     layer_list = list(layers)
     for ifreq, f in enumerate(freqs_hz):
+        # Same kx-quadrature policy as the 1D inversion's forward - the two
+        # must stay on identical numerical footing or C(f) absorbs the
+        # difference (see analytic_1d_forward.LAM_MAX_MULTIPLIER).
+        n_eff, lam_eff = resolve_quadrature(layer_list, float(f), 120, None)
         for depth in np.unique(rx_depths):
             mask = rx_depths == depth
             try:
-                _, hx_f, hz_f = magnetic_line_source_fields_layered(
+                _, hx_f, hz_f = solver(
                     off_x[mask], float(f), layer_list, float(tx_depth_m), rx_depth_m=float(depth),
+                    n_nodes=n_eff, lam_max=lam_eff,
                 )
             except GreensSolverError as exc:
                 raise ForwardRejected(
@@ -382,6 +457,7 @@ def homogeneous_analytic_gains(
     rx_depth_m: float | Sequence[float],
     rho_ohm_m: float,
     eps_r: float,
+    source_field: str = DEFAULT_SOURCE_FIELD,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Complex (Hx, Hz) gains [nfreq, nrx] for a homogeneous whole-space.
 
@@ -399,14 +475,17 @@ def homogeneous_analytic_gains(
         )
 
     layers = [Layer1D(float(rho_ohm_m), None, float(eps_r))]
+    solver = _analytic_solver(source_field)
     nfreq, nrx = freqs_hz.size, off_x.size
     hx = np.full((nfreq, nrx), np.nan, dtype=complex)
     hz = np.full((nfreq, nrx), np.nan, dtype=complex)
     for ifreq, f in enumerate(freqs_hz):
+        n_eff, lam_eff = resolve_quadrature(layers, float(f), 120, None)
         for depth in np.unique(rx_depths):
             mask = rx_depths == depth
-            _, hx_f, hz_f = magnetic_line_source_fields_layered(
+            _, hx_f, hz_f = solver(
                 off_x[mask], float(f), layers, float(tx_depth_m), rx_depth_m=float(depth),
+                n_nodes=n_eff, lam_max=lam_eff,
             )
             hx[ifreq, mask] = hx_f
             hz[ifreq, mask] = hz_f
@@ -478,6 +557,7 @@ def compute_global_calibration_from_gains(
     rho_ohm_m: float,
     dx_m: float,
     method: str = METHOD_HOMOGENEOUS,
+    source_field: str = DEFAULT_SOURCE_FIELD,
     notes: Optional[str] = None,
 ) -> dict:
     c_arr, sc_hx, sc_hz, rel_hx, rel_hz = fit_global_C_per_frequency(
@@ -493,6 +573,7 @@ def compute_global_calibration_from_gains(
         )
     return {
         "method": method,
+        "source_field": _check_source_field(source_field),
         "rho_ohm_m": float(rho_ohm_m),
         "freqs_hz": [float(f) for f in np.asarray(freqs_hz, dtype=float).reshape(-1)],
         "C_hxhz_shared": c_arr,
@@ -521,6 +602,7 @@ def _write_calibration_survey_and_cfg(
     grid: Any,
     meta: Mapping[str, Any],
     fwd_2d_dir: Path,
+    source_field: str = DEFAULT_SOURCE_FIELD,
 ) -> None:
     data_dir = run_dir / "Data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -545,7 +627,7 @@ def _write_calibration_survey_and_cfg(
         ep_file="ep.rss",
         wavelet_file="wav2d.rss",
         survey_file="Survey.rss",
-        source_field="HX",
+        source_field=_check_source_field(source_field),
         order=fd_order,
         lpml=lpml,
         adi=False,
@@ -564,6 +646,7 @@ def _write_calibration_survey_and_cfg(
 def prepare_homogeneous_calibration_run(
     fwd_2d_dir: Path | str,
     setup_meta_path: Path | str,
+    source_field: str = DEFAULT_SOURCE_FIELD,
 ) -> dict:
     """Write homogeneous calibration FDTD inputs under calibration_homogeneous/.
 
@@ -572,7 +655,8 @@ def prepare_homogeneous_calibration_run(
     """
     fwd_2d_dir = Path(fwd_2d_dir)
     meta = _require_meta_fields(load_setup_metadata(setup_meta_path))
-    run_dir = calibration_run_dir(fwd_2d_dir, METHOD_HOMOGENEOUS)
+    source_field = _check_source_field(source_field)
+    run_dir = calibration_run_dir(fwd_2d_dir, METHOD_HOMOGENEOUS, source_field)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     rho_min = float(meta["rho_min_ohm_m"])
@@ -589,14 +673,17 @@ def prepare_homogeneous_calibration_run(
     )
     _write_calibration_survey_and_cfg(
         run_dir=run_dir, geo=geo, grid=grid, meta=meta, fwd_2d_dir=fwd_2d_dir,
+        source_field=source_field,
     )
     nx, _, nz = grid.conductivity.shape
-    return {"run_dir": run_dir, "nx": int(nx), "nz": int(nz), "method": METHOD_HOMOGENEOUS, **geo}
+    return {"run_dir": run_dir, "nx": int(nx), "nz": int(nz), "method": METHOD_HOMOGENEOUS,
+            "source_field": source_field, **geo}
 
 
 def prepare_lateral_average_calibration_run(
     fwd_2d_dir: Path | str,
     setup_meta_path: Path | str,
+    source_field: str = DEFAULT_SOURCE_FIELD,
 ) -> dict:
     """Write 1D lateral-average calibration inputs under calibration_lateral_average/.
 
@@ -611,7 +698,8 @@ def prepare_lateral_average_calibration_run(
             f"Production model not found: {sg_prod}. Run Step 01 before lateral-average calibration."
         )
 
-    run_dir = calibration_run_dir(fwd_2d_dir, METHOD_LATERAL_AVERAGE)
+    source_field = _check_source_field(source_field)
+    run_dir = calibration_run_dir(fwd_2d_dir, METHOD_LATERAL_AVERAGE, source_field)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     eps_r = float(meta["eps_r_used"])
@@ -631,6 +719,7 @@ def prepare_lateral_average_calibration_run(
     )
     _write_calibration_survey_and_cfg(
         run_dir=run_dir, geo=geo, grid=grid, meta=meta, fwd_2d_dir=fwd_2d_dir,
+        source_field=source_field,
     )
     # Persist layer specs for the fit path (JSON-friendly).
     layer_payload = [
@@ -651,6 +740,7 @@ def prepare_lateral_average_calibration_run(
         "nx": int(nx),
         "nz": int(nz),
         "method": METHOD_LATERAL_AVERAGE,
+        "source_field": source_field,
         "layers": specs,
         "rho_mean_ohm_m": rho_mean,
         **geo,
@@ -665,6 +755,7 @@ def compute_calibration_from_fdtd_outputs(
     f_min_hz: float,
     n_periods_extract: float = 3.0,
     method: str = METHOD_HOMOGENEOUS,
+    source_field: str = DEFAULT_SOURCE_FIELD,
 ) -> dict:
     """Extract FDTD gains from a calibration run and fit global C vs analytic."""
     from scripts.modules.fd_visualization import compute_gains_for_fd_outputs
@@ -673,8 +764,9 @@ def compute_calibration_from_fdtd_outputs(
     if method not in (METHOD_HOMOGENEOUS, METHOD_LATERAL_AVERAGE):
         raise ValueError(f"Unknown calibration method: {method}")
 
+    source_field = _check_source_field(source_field)
     meta = _require_meta_fields(load_setup_metadata(setup_meta_path))
-    run_dir = calibration_run_dir(fwd_2d_dir, method)
+    run_dir = calibration_run_dir(fwd_2d_dir, method, source_field)
     hx_path = run_dir / "Data" / "Hxshot.rss"
     hz_path = run_dir / "Data" / "Hzshot.rss"
     wav_path = run_dir / "wav2d.rss"
@@ -711,16 +803,19 @@ def compute_calibration_from_fdtd_outputs(
     if method == METHOD_HOMOGENEOUS:
         rho_ref = float(meta["rho_min_ohm_m"])
         analytic_hx, analytic_hz = homogeneous_analytic_gains(
-            freqs_hz, off_x, tx_z, rx_z, rho_ref, eps_r,
+            freqs_hz, off_x, tx_z, rx_z, rho_ref, eps_r, source_field=source_field,
         )
-        if not np.any(np.abs(analytic_hz) > 0.0):
+        null_component = "Hz" if source_field == "HX" else "Hx"
+        null_arr = analytic_hz if source_field == "HX" else analytic_hx
+        if not np.any(np.abs(null_arr) > 0.0):
             raise ValueError(
-                "Homogeneous analytic Hz is identically zero on the calibration survey, so Hz "
-                "cannot enter C. Receivers must sit above/below the transmitter "
+                f"Homogeneous analytic {null_component} is identically zero on the calibration "
+                f"survey for a K{source_field[-1].lower()} source, so {null_component} cannot "
+                "enter C. Receivers must sit above/below the transmitter "
                 f"(expected |dz| >= {calibration_rx_dz_m(meta):g} m)."
             )
         notes = (
-            f"Global homogeneous calibration at rho={rho_ref:.4g} Ohm-m; "
+            f"Global homogeneous calibration (source={source_field}) at rho={rho_ref:.4g} Ohm-m; "
             f"sigma floored at {rel_floor_pct(rel_floor=VALIDATED_REL_ERROR_FLOOR)}% of |FDTD|. "
             f"Calibration receivers at ±{calibration_rx_dz_m(meta):.4g} m relative to Tx."
         )
@@ -742,14 +837,14 @@ def compute_calibration_from_fdtd_outputs(
         layer1d = _layer1d_from_rockem_specs(specs)
         try:
             analytic_hx, analytic_hz = layered_analytic_gains(
-                freqs_hz, off_x, tx_z, rx_z, layer1d,
+                freqs_hz, off_x, tx_z, rx_z, layer1d, source_field=source_field,
             )
         except ForwardRejected as exc:
             raise ValueError(str(exc)) from exc
         rho_ref = float(np.mean([float(s.resistivity_ohm_m) for s in specs]))
         dz_prod = float(meta["rz0_m"]) - float(meta["tz0_m"])
         notes = (
-            f"Global lateral-average 1D calibration from production sg.rss "
+            f"Global lateral-average 1D calibration (source={source_field}) from production sg.rss "
             f"(mean rho≈{rho_ref:.4g} Ohm-m, {len(specs)} layers); "
             f"production survey offsets (rz0-tz0={dz_prod:.4g} m); "
             f"sigma floored at {rel_floor_pct(rel_floor=VALIDATED_REL_ERROR_FLOOR)}% of |FDTD|."
@@ -757,8 +852,9 @@ def compute_calibration_from_fdtd_outputs(
 
     cal = compute_global_calibration_from_gains(
         fdtd_hx, fdtd_hz, analytic_hx, analytic_hz, freqs_hz,
-        rho_ohm_m=rho_ref, dx_m=dx, method=method, notes=notes,
+        rho_ohm_m=rho_ref, dx_m=dx, method=method, source_field=source_field, notes=notes,
     )
+    cal["source_field"] = source_field
     cal["fdtd_result"] = fdtd
     cal["analytic_hx"] = analytic_hx
     cal["analytic_hz"] = analytic_hz
@@ -781,9 +877,27 @@ def _json_safe_calibration_payload(cal: Mapping[str, Any]) -> dict:
 
 
 def save_calibration_to_metadata(setup_meta_path: Path | str, cal: Mapping[str, Any]) -> dict:
+    """Persist one calibration into ``setup_metadata.json``.
+
+    Two keys are written:
+
+    * ``fdtd_analytic_calibration`` - the ACTIVE calibration that notebooks
+      05/06 consume. Only an ``HX`` (Kx) calibration may take this slot: the 1D
+      inversion's forward model is the Kx line source, so handing it a Kz ``C``
+      would silently calibrate the wrong source.
+    * ``fdtd_analytic_calibration_by_source[<HX|HZ>]`` - every calibration ever
+      run, keyed by source component, so the Kz run is recorded without
+      displacing the active one.
+    """
     path = Path(setup_meta_path)
     meta = load_setup_metadata(path) if path.exists() else {}
-    meta["fdtd_analytic_calibration"] = _json_safe_calibration_payload(cal)
+    payload = _json_safe_calibration_payload(cal)
+    source_field = _check_source_field(payload.get("source_field", DEFAULT_SOURCE_FIELD))
+    by_source = dict(meta.get("fdtd_analytic_calibration_by_source") or {})
+    by_source[source_field] = payload
+    meta["fdtd_analytic_calibration_by_source"] = by_source
+    if source_field == DEFAULT_SOURCE_FIELD:
+        meta["fdtd_analytic_calibration"] = payload
     path.write_text(json.dumps(meta, indent=2) + "\n")
     return meta
 
@@ -829,6 +943,8 @@ def calibration_for_inversion(setup_meta_path: Path | str) -> dict:
 
 
 __all__ = [
+    "DEFAULT_SOURCE_FIELD",
+    "SOURCE_FIELDS",
     "VALIDATED_REL_ERROR_FLOOR",
     "CALIBRATION_SUBDIR",
     "CALIBRATION_SUBDIR_LATERAL",
