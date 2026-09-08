@@ -202,6 +202,14 @@ confirms or falsifies it; none of them are imported by the notebooks.
 
 ## `scripts/dev/`
 
+- `bugsweep.py`: parses every notebook and reports names used but never defined,
+  and Buttons never bound to a handler. Catches "deleted a widget, left the
+  reference" - the single most common bug shipped from this repo.
+- `handlersweep.py`: CALLS every `on_*` / `update_*` / `refresh_*` handler in
+  every notebook and fails on `NameError`/`AttributeError`.
+  `validate_notebooks.py` executes the cell but never clicks anything, so a
+  broken callback passes it. Run both. It stubs `Figure.show`, because plotly
+  opens a browser tab per figure outside a notebook.
 - `nbedit.py`: exact-match editor for the notebooks' single large code cells.
   Each edit declares how many occurrences it expects and fails loudly if the
   count is wrong, so a stale edit cannot silently do nothing.

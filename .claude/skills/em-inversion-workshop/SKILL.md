@@ -5,7 +5,145 @@ description: Use when working on the EM_inversion_workshop repo - the Voila/Jupy
 
 # EM inversion workshop
 
-## RULE 1 - CHANGE THE WHOLE CHAIN, OR DO NOT CHANGE IT
+**The rules, in priority order. Read them before editing anything.**
+
+1. **Do not leave a bug behind** - no dead references, no dead controls.
+2. **Actions run on everything; visualisation selects freely.**
+3. **Step 01 is the setup; every other notebook remembers it.**
+4. **Change the whole chain, or do not change it.**
+5. **The docs are part of the chain.**
+
+
+## RULE 1 - DO NOT LEAVE A BUG BEHIND
+
+**Never hand over code with a known-broken reference, a dead symbol, an
+unreachable branch, or a control that does nothing. Not once. Not "I'll fix it
+next round".**
+
+Every bug shipped from this repo has been the same shape: something was deleted
+or renamed, and a reference to it was left behind. Deleting a widget and leaving
+a handler that reads `.value` off it is a `NameError` in front of the user.
+Deleting a button and leaving its `bind_button_with_feedback` call is a
+`NameError` at import. These are not subtle - they are found by looking.
+
+**After every edit, before saying anything is done, run all three:**
+
+```bash
+python scripts/validate_notebooks.py     # executes every code cell
+python scripts/dev/bugsweep.py           # undefined names + unbound buttons
+python scripts/dev/handlersweep.py       # CALLS every handler in every notebook
+```
+
+`validate_notebooks.py` alone is NOT enough: it executes the cell but never
+clicks anything, so a `NameError` inside a callback passes it and still breaks
+for the user. That is how the `cal_freq_select` bug shipped.
+
+- `bugsweep.py` parses each notebook and reports names that are used but never
+  defined, and Buttons that are never bound to a handler. It is the cheap check
+  that catches "deleted a widget, left the reference".
+- `handlersweep.py` executes every `on_*` / `update_*` / `refresh_*` function
+  and fails on `NameError`/`AttributeError`. Other exceptions are expected
+  (empty workspace) and ignored. It pins a plotly renderer and stubs
+  `Figure.show`, because `fig.show()` OPENS A BROWSER TAB outside a notebook -
+  do not remove that guard, it once spammed the user's browser.
+
+Then, by hand: anything that spawns a thread needs its re-entrancy path tested
+by clicking several times, and its progress panel checked for what it actually
+displays. State that you ran these, with the output. "Should work" is not a
+check.
+
+Specific traps already paid for here:
+
+- a widget deleted while a handler still reads it (`cal_freq_select`)
+- a background worker that never sets the state its own status panel reads,
+  so the panel says "not started" for the whole run
+- a re-entrancy guard checked against state the worker never sets, so every
+  click launches another batch
+- `subprocess.run` where a handle was needed, so Stop had nothing to kill
+- a plot reading a key (`fdtd_result`) that the on-disk JSON never carries,
+  so it silently drew nothing
+
+## RULE 2 - ACTIONS ARE ALWAYS ON EVERYTHING; VISUALISATION SELECTS FREELY
+
+There are two kinds of control, and they have OPPOSITE rules. Get this
+distinction right - both halves have been broken here, in both directions.
+
+### Actions: never a choice. Always everything.
+
+An action is anything that RUNS, INVERTS, CALIBRATES, MODELS, EXTRACTS or
+WRITES. Step 01 is the only place frequencies and source components are chosen.
+After it, **no action control may act on one frequency, one source or one
+dataset.** They all act on the whole acquisition matrix.
+
+Banned, no exceptions:
+
+- a per-dataset "Run modelling" button - modelling runs every dataset
+- "Calibrate (homogeneous)" / "Calibrate (lateral average)" per dataset, and any
+  `cal source` dropdown - calibration does every dataset with its own source
+- a `flist` / `f_min` / `n_periods_extract` input feeding an action - those come
+  from each dataset's own `setup_metadata.json`, which Step 01 wrote
+- a tensor-component selector on the inversion - fit every component present
+- a "one run per frequency" / broadband switch - there is no broadband run and
+  no broadband wavelet
+
+Going from one broadband run to N frequencies x M sources must make the
+workshop cheaper to USE, not turn it into N x M rounds of pick-and-click.
+
+### Visualisation: selectors are REQUIRED. Do not remove them.
+
+A plot control chooses what is DISPLAYED. It changes nothing on disk and runs
+nothing. **Leave these alone, and add them where a figure would otherwise be
+unreadable:**
+
+- `view dataset` dropdowns, frequency dropdowns, component (Hx/Hz) dropdowns
+- Tx index, local rx index, trace index, run number
+
+Cramming every dataset and every frequency onto one axis to avoid a dropdown is
+NOT what this rule asks for. It makes the figures useless. That mistake was made
+once, in notebooks 02 and 04, and had to be reverted.
+
+### The test to apply
+
+Ask: **does this control change what gets computed or written to disk?**
+
+- Yes -> it must not exist. The action does all of them.
+- No, it only changes what is drawn -> keep it, and label it `view ...` so the
+  next person does not delete it.
+
+## RULE 3 - STEP 01 IS THE SETUP. EVERY NOTEBOOK REMEMBERS IT.
+
+**The user enters the survey setup ONCE, in Step 01. No later notebook asks for
+any part of it again - not the frequency list, not `n_periods`, not
+`n_periods_extract`, not `f_min`/`f_max`, not `eps_r`, not the geometry.**
+
+Step 01 writes all of it into each dataset's `setup_metadata.json`, and
+`manifest.json` lists the datasets. Every later notebook READS those. A text box
+in Step 02/03/04/05/06 that re-asks for a setup value is a bug even when it is
+pre-filled from the metadata, because:
+
+- the user can edit it to something the data was never modelled with, and
+  nothing checks;
+- with a per-frequency matrix there is no single right answer to pre-fill -
+  each dataset has its OWN `flist_hz`, `f_min_hz` and `n_periods_extract`;
+- it makes the setup look like a per-notebook choice when it is a property of
+  the data on disk.
+
+Read the value, show it read-only if it is worth showing, never offer it for
+editing:
+
+```python
+meta = json.loads((Path(d['run_dir']) / 'setup_metadata.json').read_text())
+freqs = np.asarray(meta['flist_hz'], dtype=float)
+npx   = float(meta['n_periods_extract'])
+f_min = float(meta['f_min_hz'])
+```
+
+Use the metadata key directly. Do NOT fall back to a widget, and do NOT use
+`.get(key, default)` for a key Step 01 always writes - a silent default hides a
+broken setup instead of failing where it can be seen. The key list Step 01
+guarantees is in "`setup_metadata.json` IS the contract" below.
+
+## RULE 4 - CHANGE THE WHOLE CHAIN, OR DO NOT CHANGE IT
 
 **When you change anything that something else depends on, you change every
 consumer in the same edit, and you verify the chain end to end before you stop.**
@@ -13,7 +151,7 @@ A change that leaves any downstream step broken is not a partial success. It is
 a regression, and it is worse than not having started, because the breakage
 surfaces later and somewhere else.
 
-This is the single most important rule in this repo, because the workshop *is* a
+Changing a dependency without its consumers is how this repo breaks, because the workshop *is* a
 chain: Step 01 writes inputs -> Step 02 models and calibrates -> Steps 03/04
 invert and display in 2D -> Steps 05/06 invert and display in 1D. Every step
 consumes the previous one's files and metadata schema.
@@ -68,7 +206,7 @@ implementation imported everywhere:
   true-model QC overlay had its own solver loop until it was found to be both
   Kx-only and crashing on any survey with more than one receiver.
 
-## RULE 2 - THE DOCS ARE PART OF THE CHAIN
+## RULE 5 - THE DOCS ARE PART OF THE CHAIN
 
 `KNOWN_ISSUES.md` and this skill are consumers like any other. **Any change that
 alters behaviour either of them describes must update both in the same edit.**
