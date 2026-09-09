@@ -210,6 +210,14 @@ confirms or falsifies it; none of them are imported by the notebooks.
   `validate_notebooks.py` executes the cell but never clicks anything, so a
   broken callback passes it. Run both. It stubs `Figure.show`, because plotly
   opens a browser tab per figure outside a notebook.
+- `chainsweep.py`: builds a synthetic acquisition-matrix workspace and executes
+  every notebook against it, failing if any dataset artifact
+  (`setup_metadata.json`, `sg.rss`, `wav2d.rss`, `Data/*.rss`, ...) is still
+  bound to the forward ROOT. On a matrix workspace the root holds only
+  `manifest.json` and dataset subdirectories, so such a path cannot resolve.
+  The repo's own `workspace/` is usually single-dataset, where the wrong path
+  still exists - which is why the other checks all passed while Step 05 was
+  broken for anyone with a real matrix.
 - `nbedit.py`: exact-match editor for the notebooks' single large code cells.
   Each edit declares how many occurrences it expects and fails loudly if the
   count is wrong, so a stale edit cannot silently do nothing.

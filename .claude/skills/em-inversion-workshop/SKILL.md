@@ -32,6 +32,7 @@ Deleting a button and leaving its `bind_button_with_feedback` call is a
 python scripts/validate_notebooks.py     # executes every code cell
 python scripts/dev/bugsweep.py           # undefined names + unbound buttons
 python scripts/dev/handlersweep.py       # CALLS every handler in every notebook
+python scripts/dev/chainsweep.py         # every notebook against a MATRIX workspace
 ```
 
 `validate_notebooks.py` alone is NOT enough: it executes the cell but never
@@ -46,6 +47,12 @@ for the user. That is how the `cal_freq_select` bug shipped.
   (empty workspace) and ignored. It pins a plotly renderer and stubs
   `Figure.show`, because `fig.show()` OPENS A BROWSER TAB outside a notebook -
   do not remove that guard, it once spammed the user's browser.
+- `chainsweep.py` builds a synthetic MATRIX workspace and executes every
+  notebook against it, failing if any dataset artifact stays bound to the
+  forward root. The repo's own `workspace/` is usually a single-dataset one,
+  where the wrong path still exists - so the other three checks all pass while
+  the notebook is broken for anyone with a real acquisition matrix. That is
+  exactly how the `SETUP_META` bug reached a user.
 
 Then, by hand: anything that spawns a thread needs its re-entrancy path tested
 by clicking several times, and its progress panel checked for what it actually
@@ -167,6 +174,7 @@ same edit that caused it:
 | Made Step 01 emit an acquisition matrix | Step 02 could only read a single dataset | run the next step, not just the one you edited |
 | Added `source_field` to `forward_1d_gains` | the empymod fallback still asked for `ab=44/64`, so a rejected Kz solve silently returned the **Kx** response | follow the new argument into every branch, including error paths |
 | Added the per-run acquisition matrix | `iter_datasets` passed legacy manifest entries through unnormalised, with no `source_field` key for consumers to index | define the contract (`DATASET_KEYS`) and make every producer satisfy it |
+| Made Step 05 matrix-aware | it kept `SETUP_META = <forward root>/setup_metadata.json`, a file that cannot exist on a matrix workspace - the lambda tuner died on it in front of the user | grep the notebook you edited for its OWN path constants, and run `chainsweep.py`, which fails on exactly this |
 
 ### The checklist, before you call any change done
 
@@ -365,6 +373,36 @@ workspace and writes `workspace/report/workflow_report.tex` + figures. It reads
 reports on ONE forward dataset: `--dataset NAME`, `--all-datasets` (one report
 per dataset under `report/<dataset>/`, because the figure basenames are fixed),
 `--list-datasets`. Every report names the dataset it is about.
+
+### THE PATH-BINDING CONTRACT (this is a link, and it was missing here)
+
+On an acquisition-matrix workspace the forward ROOT contains **only**
+`manifest.json` and one subdirectory per dataset. Every one of these belongs to
+a DATASET, never to the root:
+
+```
+setup_metadata.json  sg.rss  ep.rss  wav2d.rss  Survey.rss  mod.cfg
+runmod.sh  mpiqueue.log  Data/Hxshot.rss  Data/Hzshot.rss
+```
+
+**So no notebook global may be bound as `CONFIG.fwd_2d_dir / <one of those>`.**
+It must be bound through a dataset. Two mechanisms exist:
+
+- Steps 02, 03, 04, 06 - `_select_dataset(name)` rebinds the path globals onto
+  the chosen dataset. Each rebinds its OWN hand-maintained list, declared in its
+  `global` statement; adding a path constant means adding it there too.
+- Step 05 - consumes the WHOLE matrix, so it has no "selected" dataset. It binds
+  `SETUP_META` and `SG_TRUE_PATH` to the representative dataset at startup via
+  `active_setup_meta()`, and reads every dataset through
+  `matrix_dataset_dirs()` / `matrix_metadata_paths()`.
+
+This contract is the link that was missing from this map, and its absence is
+why a broken one shipped: the map recorded what each step READS, but never how
+the path gets RESOLVED, so "follow the chain" could not catch it. A map of
+artifacts is not a map of the chain - record the mechanism too.
+
+Enforced by `scripts/dev/chainsweep.py`. Run it after touching any path
+constant, and do not rely on remembering this.
 
 ### `setup_metadata.json` IS the contract
 

@@ -131,24 +131,29 @@ geometry, which is why it is still here.
 
 ---
 
-## 7. Step 05 keeps its own `SETUP_META`, unlike every other notebook
+## 7. Two different mechanisms bind dataset paths
 
-**Status: fixed for every current path, but structurally different.**
+**Status: both correct now, and enforced by a test - but still two mechanisms.**
 
-Steps 02, 03, 04 and 06 all carry `_select_dataset`, which rebinds
-`FWD_2D_DIR`/`SETUP_META` onto a real dataset directory. Step 05 does not - it
-consumes the WHOLE matrix at once, so there is no "selected" dataset to bind
-to. It therefore resolves its metadata through `active_setup_meta()` and
-rebinds `SETUP_META` once at startup.
+Steps 02, 03, 04 and 06 rebind their path globals with `_select_dataset`, each
+declaring its OWN hand-maintained list in a `global` statement. Step 05 has no
+selected dataset - it consumes the whole matrix - so it binds `SETUP_META` and
+`SG_TRUE_PATH` to a representative dataset at startup via `active_setup_meta()`.
 
-That worked around a real failure (`FileNotFoundError:
-.../workspace/2D/forward/setup_metadata.json` from the lambda tuner, because on
-a matrix workspace the forward ROOT holds only subdirectories), but it leaves
-two different mechanisms in the repo for the same job.
+That split is what let a broken path ship: `SETUP_META` stayed pointed at the
+forward root, which on a matrix workspace holds no `setup_metadata.json`, and
+the lambda tuner died on it in front of a user. A second instance
+(`SG_TRUE_PATH`) was still present afterwards and was found only when
+`scripts/dev/chainsweep.py` was written.
 
-**Fix:** give `iter_datasets` a documented "representative dataset" accessor and
-have all five notebooks use it, instead of one rebinding globals and another
-resolving lazily.
+The hand-maintained `global` lists are the remaining hazard: adding a path
+constant to one of those notebooks without adding it to its `_select_dataset`
+silently reintroduces the bug. `chainsweep.py` now fails on exactly that, so it
+cannot ship - but the design still invites it.
+
+**Fix:** one mechanism. A `dataset_paths(run_dir)` helper in `headless` that
+returns the whole set as a namespace, used by all five notebooks, so there is no
+per-notebook list to forget.
 
 ---
 
