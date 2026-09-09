@@ -188,7 +188,138 @@ per-notebook list to forget.
 
 ---
 
-## 9. Notebook 03's second code cell relies on an injected `display`
+## 9. Step 05 still does `float(eps_r)` on a per-frequency array
+
+**Status: broken on every acquisition-matrix workspace. Confirmed in the GUI.**
+
+`headless.matrix_setup` returns `eps_r` as one value per frequency (measured
+1198.3 / 599.2 / 399.4 at 2/4/6 kHz on this survey). `get_eps_r_used()` in
+notebook 05 returns that array, `current_cfg()["eps_r"]` stores it, and the
+analytic forward (`forward_1d_gains` / `inversion_1d._eps_for_freqs`) already
+accepts it. The inversion run itself can finish.
+
+Then every consumer that still wraps it in `float()` dies with:
+
+```
+TypeError: only length-1 arrays can be converted to Python scalars
+```
+
+Hit in the GUI:
+
+| Action | Where `float()` is | What the user sees |
+|---|---|---|
+| Convergence check | `check_kx_convergence` → `layers_from_rho_thk` (`analytic_1d_forward.py`) | `Convergence check failed: only length-1 arrays...` |
+| True-model QC overlay | `forward_analytic_true_model_for_tx` in notebook 05 | overlay fails; `on_refresh_qc` reports the TypeError |
+| Export | `build_1d_run_summary` (`run_report.py`: `"eps_r_used": float(cfg.get("eps_r", 7.0))`) | `Export failed:` plus traceback. No `REPORT.md`, no summary JSON |
+
+Same class, not yet clicked in this session but will fire on a matrix:
+
+- notebook 06 `on_generate_syn`: `eps_r = float(summary.get('eps_r_used', get_eps_r_used()))`. Even after a successful export of a list, this line still crashes. If export never writes `eps_r_used`, the fallback is already the array from `get_eps_r_used()`.
+- notebook 06 also collapses receiver depth with `rx_depth_m = float(rx_z[tr_idx[0]])`, the same first-receiver bug notebook 05 already removed from its own forward path.
+
+A single-dataset workspace (plain float) does not hit any of these. That is why
+`validate_notebooks.py` / a one-dataset `workspace/` do not catch it.
+
+**Same root, silent rather than a crash** (collapsing a per-dataset value to one
+band-wide scalar, which RULE 3 forbids):
+
+- `setup_n_periods_extract()` in notebooks 05 and 06 takes `m["n_periods_extract"][0]`.
+- `get_f_min_hz` in notebook 05 reads the representative dataset only via
+  `default_f_min_hz_from_meta`.
+- `extract_features` then passes that collapsed `n_periods_extract` into
+  `load_tensor_features`, which uses the override for every dataset instead of
+  each dataset's own `setup_metadata.json`.
+- `on_export` does `float(cfg.get("n_periods_extract"))` and `float(cfg.get("f_min_hz"))`
+  on those already-collapsed scalars, so they survive export as one number.
+
+The inversion objective is not in this list: it already threads `cfg["eps_r"]`
+through `inversion_1d` without `float()`. The run can look successful and then
+fail at QC / export, or export a report whose `n_periods_extract` / `f_min_hz`
+are whoever's `[0]`.
+
+**Fix:** stop wrapping per-frequency values in `float()`. `build_1d_run_summary`
+should store `eps_r_used` as a list aligned with `freqs_hz` (a scalar only when
+there is one value). `check_kx_convergence` should build layers per frequency's
+`eps_r` (it already passes the array into `forward_1d_gains`; only the
+`layers_from_rho_thk` / `lam_max` leg still assumes a scalar). Notebook 05's
+true-model overlay and notebook 06's synthetics must pass the array through to
+`forward_1d_gains`. Do not take `[0]` of `n_periods_extract` / `f_min` /
+`eps_r` and apply it across the band.
+
+---
+
+## 10. Visualisation selectors still pretend one dataset holds the whole band
+
+**Status: broken on every acquisition-matrix workspace. The widgets are the
+pre-matrix layout; the data is not.**
+
+Step 01 now writes one dataset per **(frequency, source)** pair, named
+`f{Hz}_{hx|hz}` (`headless.dataset_name`). Each dataset's `flist_hz` is a
+single tone. The plot GUIs in 02 / 04 / 06 still offer a **dataset** dropdown
+*and* a **frequency** dropdown *and* a **receiver-component** (Hx/Hz) dropdown,
+as if frequency were a slice inside a broadband gather. It is not. Changing
+frequency independently of dataset cannot show another tone of the same run -
+that tone lives in a different directory, modelled with a different source.
+
+What the user actually sees:
+
+| Notebook | Widget | What it is filled from | What you get on a matrix |
+|---|---|---|---|
+| 02 data plot | `view dataset` | `iter_datasets` names (`f2000Hz_hx`, …) | the (freq, source) pair. This is the real selector. |
+| 02 data plot | `comp_freq` (`frequency`) | that dataset's `Hx['freqs']` = its one-element `flist_hz` | **one option, the first (only) tone** |
+| 02 data plot | `component_select` | Hx / Hz | receiver only; source is already baked into the dataset |
+| 02 calibration | `cal_freq_select` (`cal freq`) | `freqs_hz` of the **first** in-memory calibration | **one option**. Changing `view dataset` does not even rebuild this list, and `on_view_dataset_change` never calls `update_calibration_plot`. |
+| 02 calibration | `cal_comp_select` (`cal comp`) | Hx / Hz | receiver of the currently viewed dataset's source. No way to pick Kz vs Kx except by hoping `view dataset` and the in-memory cal dict stay in sync (`k.startswith(view_dataset.value)` against keys `'name [HX]'`). |
+| 04 data compare | `dataset_select` + `comp_freq` + `component_select` | same pattern as 02 | frequency dropdown is a one-item list of the selected run's tone |
+| 06 data compare | `dataset_select` | `_select_dataset` rebinds path globals | on a matrix, `on_load_real` **ignores** this and assembles the whole band via `load_tensor_features`. The dropdown looks like it chooses what you see; it does not. |
+| 06 data compare | `comp_freq` | assembled `feats['freqs']` | this one actually lists every tone - because 1D stacks them - while the dataset dropdown next to it is a leftover |
+| 06 data compare | `component_select` | Hx / Hz | receiver only. Source (Kx vs Kz, i.e. Cxx/Cxz vs Czx/Czz) is not a view control at all. |
+| 05 QC | `qc_freq_select` | stacked inversion freqs | this is the exception: 1D *is* joint across the band, so picking a tone of the QC overlay is meaningful. There is no source/receiver selector; all fitted tensor components are drawn as columns. |
+
+The 02 calibration panel still has HTML that documents a **`cal source`**
+dropdown. That control was removed (calibration is an action on ALL datasets).
+The copy is now a lie, and the remaining `cal freq` / `cal comp` pair cannot
+replace it because frequency is not independent of dataset.
+
+This is not "missing a frequency in the list" as a fill-in bug. The axis the
+widgets are choosing on **no longer exists**. A dataset *is* a frequency and a
+source. A second dropdown that iterates `flist_hz` of the current dataset
+will always be length 1. Cramming every dataset onto one axis to avoid a
+dropdown is still wrong (RULE 2, visualisation half - that was tried in 02/04
+and reverted). The current three-way split is the other failure mode of the
+same rule: selectors that do not correspond to what is on disk.
+
+**What the view control should be.** One list whose options are every
+combination of
+
+- frequency
+- source type (Kx / Kz, i.e. `source_field` HX/HZ)
+- receiver type (Hx / Hz)
+
+labelled so a human can read it, e.g. `2000 Hz · Kx → Hx`. That is the 2×2
+magnetic tensor at one tone, which is what the matrix actually acquired.
+Keep the within-gather selectors (`tx`, `local rx`, `trace idx`, `plot`
+metric, run number) - those still vary inside one combination.
+
+Notebook 05's QC is the one place a lone frequency dropdown still makes sense
+(joint inversion, one model, several tones). It should still be able to pick
+the tensor component being drawn, rather than always drawing every column.
+
+RULE 2's visualisation examples currently list "view dataset, frequency
+dropdowns, component (Hx/Hz) dropdowns" as separate widgets. That list is the
+old layout. Updating the skill belongs in the same change as the refactor
+(RULE 5), not before it.
+
+**Fix:** one view-combination dropdown (freq × source × receiver) shared by
+the plot panels in 02, 04 and 06, populated from `iter_datasets` × {Hx, Hz},
+not from a single dataset's `flist_hz`. Delete the now-redundant `frequency` /
+`cal freq` dropdowns. Make `view dataset` in 06 either drive the 1D compare
+(it currently does not) or go away in favour of that combination list. Rewrite
+the 02 calibration HTML so it no longer describes `cal source`.
+
+---
+
+## 11. Notebook 03's second code cell relies on an injected `display`
 
 **Status: harmless in Voila, a trap for anything headless.**
 

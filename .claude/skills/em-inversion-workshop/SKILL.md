@@ -10,7 +10,8 @@ description: Use when working on the EM_inversion_workshop repo - the Voila/Jupy
 1. **Do not leave a bug behind** - no dead references, no dead controls.
 2. **Actions run on everything; visualisation selects freely.**
 3. **Step 01 is the setup; every other notebook remembers it.**
-4. **Change the whole chain, or do not change it.**
+4. **Change the whole chain, or do not change it.** A written
+   consequence table in this conversation is the gate. No table, no edit.
 5. **The docs are part of the chain.**
 
 
@@ -69,6 +70,10 @@ Specific traps already paid for here:
 - `subprocess.run` where a handle was needed, so Stop had nothing to kill
 - a plot reading a key (`fdtd_result`) that the on-disk JSON never carries,
   so it silently drew nothing
+- `float(eps_r)` / `float(cfg.get("eps_r"))` after `eps_r` became a
+  per-frequency array: the producer and the analytic forward were updated, the
+  `float()` sites were not, and Step 05 died in the GUI (convergence, export,
+  true-model QC) with `only length-1 arrays can be converted to Python scalars`
 
 ## RULE 2 - ACTIONS ARE ALWAYS ON EVERYTHING; VISUALISATION SELECTS FREELY
 
@@ -191,6 +196,59 @@ chain: Step 01 writes inputs -> Step 02 models and calibrates -> Steps 03/04
 invert and display in 2D -> Steps 05/06 invert and display in 1D. Every step
 consumes the previous one's files and metadata schema.
 
+### Consequence analysis is the gate. No table, no edit.
+
+Grep-after-the-fact is how this rule has been "followed" while still shipping
+breakage. The `eps_r` type change is the type specimen: `matrix_setup` and
+`get_eps_r_used` started returning a per-frequency **array**,
+`forward_1d_gains` / `inversion_1d` were taught to accept it, and the work was
+called done. The **name** was updated. The **contract** was not. Every site
+that still did `float(eps_r)` died in the GUI (`check_kx_convergence` →
+`layers_from_rho_thk`, `build_1d_run_summary`, notebook 05's true-model QC,
+notebook 06's synthetics). That is KNOWN_ISSUES §9.
+
+A type or shape change (scalar → array, one path → per-dataset, one `C` →
+per-source) does not introduce a new symbol. Grepping the name and updating
+the producer therefore looks complete and is not.
+
+**Before the first edit**, write this in the conversation. Not in your head.
+If it is not in the chat, you have not done the analysis, and you do not edit.
+
+```
+Change:       <what will be true that is not true now>
+Old contract: <type, shape, who writes it, where it lives>
+New contract: <type, shape, who writes it, where it lives>
+```
+
+Then one row per site that currently depends on the **old** contract:
+
+| Site (file:function, or notebook handler) | Old assumption | If unchanged, breaks how |
+
+Fill the rows with search, not recollection:
+
+1. `grep -rn "<symbol>" --include="*.py" --include="*.ipynb" . | grep -v __pycache__`
+   Notebooks are code: they will not show up in an import check.
+2. **Also grep the operations that assume the old type**, or you will miss
+   every `float()` wrapper. For a scalar becoming an array / list: `float(`,
+   `int(`, `[0]`, `.item()`, `:.1f`, `:.4g`, `np.log10(`. For a removed
+   argument: every caller, including fallbacks. For a removed widget: every
+   `.value`. For a new capability: every branch, including error paths.
+3. If the value is in the RULE 3 per-dataset table (`eps_r_used`, `f_min_hz`,
+   `n_periods_extract`, `flist_hz`, `dx_model_target_m`, …), every
+   `float(meta[key])` and every `m[key][0]` is a row.
+4. A producer-only update (changed `matrix_setup`, left
+   `run_report.build_1d_run_summary` doing `float(cfg.get("eps_r"))`) is the
+   forbidden shape. It is not "I'll fix consumers next round".
+
+Only after that table is in the chat do you edit. Every row is updated in the
+**same** change, or the row says why the site is already compatible **and you
+have read that code**. Then the RULE 1 sweeps, then the consumer a user
+operates. An import that succeeds is not a behaviour that is correct.
+
+If a numeric default changes, re-derive the threshold that depends on it. A
+pass/fail threshold inherited from a different test is worse than none,
+because it looks like a measurement.
+
 Real breakages that happened here, each of which should have been caught in the
 same edit that caused it:
 
@@ -204,22 +262,7 @@ same edit that caused it:
 | Added the per-run acquisition matrix | `iter_datasets` passed legacy manifest entries through unnormalised, with no `source_field` key for consumers to index | define the contract (`DATASET_KEYS`) and make every producer satisfy it |
 | Made Step 05 matrix-aware | it kept `SETUP_META = <forward root>/setup_metadata.json`, a file that cannot exist on a matrix workspace - the lambda tuner died on it in front of the user | grep the notebook you edited for its OWN path constants, and run `chainsweep.py`, which fails on exactly this |
 | Built one dataset per frequency, each with its own `eps_r_used` | Steps 05/06 kept reading ONE `eps_r` and applying it to the whole band - 0.91 sigma of bias at 6 kHz, visible only as a slightly worse fit | list which metadata keys VARY across datasets, then grep every reader of each one |
-
-### The checklist, before you call any change done
-
-1. `grep -rn "<symbol>" --include="*.py" --include="*.ipynb" . | grep -v __pycache__`
-   for every function, argument, config key and metadata field you touched.
-   Notebooks are code: they will not show up in an import check.
-2. Update **every** consumer in the same change.
-3. Run `python scripts/validate_notebooks.py` - it executes EVERY code cell of
-   every notebook. (It used to run only the first, which meant notebook 04's
-   959-line GUI cell was never checked at all.) Use an environment with the GUI
-   dependencies; without them every notebook "fails" for the wrong reason.
-4. Run the consumer that a user actually operates, and look at its output. An
-   import that succeeds is not a behaviour that is correct.
-5. If a numeric default changes, re-derive the threshold that depends on it. A
-   pass/fail threshold inherited from a different test is worse than none,
-   because it looks like a measurement.
+| Then made that `eps_r` an **array** in `get_eps_r_used` | every leftover `float(eps_r)` (`layers_from_rho_thk`, `build_1d_run_summary`, notebook 05 QC, notebook 06 synthetics) - TypeError in the GUI | type/shape change: grep `float(` / `[0]` / format of the OLD scalar, not just the name |
 
 ### Duplication is how chains rot
 
