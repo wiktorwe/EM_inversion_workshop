@@ -131,7 +131,38 @@ geometry, which is why it is still here.
 
 ---
 
-## 7. Two different mechanisms bind dataset paths
+## 7. On a homogeneous-calibrated matrix the TRUE model does not fit
+
+**Status: measured, cause not yet confirmed.**
+
+The workshop's strongest self-check is "does the TRUE model fit the data?" - if
+it does not, no inversion result from that workspace means anything.
+
+On a per-frequency matrix calibrated with `homogeneous_rho_min`
+(3 frequencies x 2 sources, rho_ref = 1 Ohm-m), the true model beneath tx0
+scores **reduced chi-squared 3.92** over all four tensor components. On the
+single-dataset reference workspace, calibrated with `lateral_average_true`
+(rho_ref 29.85), the same check gives **0.0036**.
+
+Fixing the per-frequency `eps_r` bug moved it from 4.15 to 3.92, so that was
+real but not the main term. Three candidates, none yet tested:
+
+- the calibration Earth. `homogeneous_rho_min` at 1 Ohm-m is far from a ~30
+  Ohm-m production model; `lateral_average_true` exists precisely for this.
+  Testing it needs one FDTD calibration run per dataset.
+- `sigma` from a homogeneous calibration may be on the wrong amplitude scale
+  for the production data, which inflates chi-squared without any physics
+  being wrong.
+- the layered approximation beneath that transmitter.
+
+**Do this first on a matrix workspace:** calibrate with
+`1D lateral average of true model`, then re-run the true-model check. Until
+chi-squared is below 1, treat inversion results from that workspace as
+uninterpretable.
+
+---
+
+## 8. Two different mechanisms bind dataset paths
 
 **Status: both correct now, and enforced by a test - but still two mechanisms.**
 
@@ -157,7 +188,7 @@ per-notebook list to forget.
 
 ---
 
-## 8. Notebook 03's second code cell relies on an injected `display`
+## 9. Notebook 03's second code cell relies on an injected `display`
 
 **Status: harmless in Voila, a trap for anything headless.**
 

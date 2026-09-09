@@ -765,6 +765,65 @@ def build_forward_matrix(
     return manifest
 
 
+def matrix_setup(out_root: Path | str) -> dict:
+    """Everything Step 01 decided, resolved across the WHOLE acquisition matrix.
+
+    ONE implementation, used by Steps 05 and 06, because these values are
+    per-dataset and collapsing them to a band-wide scalar is a bug that is very
+    hard to see. Measured cost of doing it with `eps_r_used` alone: 0.91 sigma
+    of systematic bias on Hx at 6 kHz - most of the assumed noise budget, on the
+    best-resolved data in the survey.
+
+    Returns:
+        datasets     the `iter_datasets` list
+        by_source    {source: [run_dir, ...]} ordered by frequency
+        meta_paths   {source: [setup_metadata.json, ...]} in the same order
+        freqs        every frequency in the matrix, ascending
+        eps_r        `eps_r_used` per frequency, aligned with `freqs`
+        f_min        `f_min_hz` per frequency, aligned with `freqs`
+        n_periods_extract   per frequency, aligned with `freqs`
+        representative      a metadata path that EXISTS, for scalar defaults
+        single       True when there is nothing to assemble (one dataset)
+    """
+    out_root = Path(out_root)
+    ds = iter_datasets(out_root)
+    if not ds:
+        raise FileNotFoundError(
+            f"No forward datasets under {out_root}. Run Step 01 (Generate FD inputs) first."
+        )
+
+    rows: dict[float, dict] = {}
+    by_source: dict[str, list] = {}
+    for d in ds:
+        meta = d.get("meta") or json.loads(
+            (Path(d["run_dir"]) / "setup_metadata.json").read_text())
+        src = str(d.get("source_field", "HX")).upper()
+        by_source.setdefault(src, []).append((float(meta["flist_hz"][0]), Path(d["run_dir"])))
+        for f in meta["flist_hz"]:
+            rows.setdefault(float(f), {
+                "eps_r": float(meta["eps_r_used"]),
+                "f_min": float(meta["f_min_hz"]),
+                "n_periods_extract": float(meta["n_periods_extract"]),
+            })
+    for src in by_source:
+        by_source[src] = [p for _f, p in sorted(by_source[src], key=lambda t: t[0])]
+
+    freqs = np.asarray(sorted(rows), dtype=float)
+    rep = Path(ds[0]["run_dir"]) / "setup_metadata.json"
+    return {
+        "datasets": ds,
+        "by_source": by_source,
+        "meta_paths": {s: [p / "setup_metadata.json" for p in v] for s, v in by_source.items()},
+        "freqs": freqs,
+        "eps_r": np.asarray([rows[float(f)]["eps_r"] for f in freqs], dtype=float),
+        "f_min": np.asarray([rows[float(f)]["f_min"] for f in freqs], dtype=float),
+        "n_periods_extract": np.asarray(
+            [rows[float(f)]["n_periods_extract"] for f in freqs], dtype=float),
+        "representative": rep,
+        "single": len(ds) < 2,
+    }
+
+
 # Keys every `iter_datasets` entry is guaranteed to carry. Consumers (notebooks
 # 02/04/06, `workshop_report`) index these directly, so anything that produces a
 # dataset list must fill all of them.
@@ -819,6 +878,7 @@ __all__ = [
     "build_per_frequency_forward_inputs",
     "dataset_name",
     "iter_datasets",
+    "matrix_setup",
     "load_manifest",
     "SetupParams",
     "build_forward_inputs",

@@ -269,10 +269,36 @@ def forward_1d_gains(
     if thickness.size and np.any(thickness <= 0.0):
         raise ForwardRejected("non-positive thickness in candidate model")
 
-    try:
-        layers = layers_from_rho_thk(rho, thickness, eps_r)
-    except ValueError as exc:
-        raise ForwardRejected(str(exc)) from exc
+    # eps_r may be a SCALAR or one value PER FREQUENCY. Per-frequency is the
+    # normal case on an acquisition matrix: `design_explicit_fd` inflates eps_r
+    # to buy a larger explicit dt, and it grows as frequency falls, so each
+    # dataset has its own (measured 1198.3 / 599.2 / 399.4 at 2/4/6 kHz on the
+    # workshop survey). The analytic reference MUST be evaluated at the same
+    # eps_r as the FDTD run that produced the data it is being fitted to, and
+    # as the calibration that fitted C for it - otherwise the mismatch enters
+    # the misfit as a systematic bias. Measured at 6 kHz when a single
+    # band-wide eps_r was used: 0.91 sigma on Hx, i.e. most of the assumed
+    # noise budget, on the best-resolved data in the survey.
+    eps_arr = np.asarray(eps_r, dtype=float).reshape(-1)
+    if eps_arr.size == 1:
+        eps_arr = np.full(freqs_hz.shape, float(eps_arr[0]), dtype=float)
+    if eps_arr.shape != freqs_hz.shape:
+        raise ValueError(
+            f"eps_r size {eps_arr.size} matches neither 1 nor the frequency "
+            f"count {freqs_hz.size}"
+        )
+    _layer_cache: Dict[float, List[Layer1D]] = {}
+
+    def layers_at(eps_value: float):
+        key = float(eps_value)
+        if key not in _layer_cache:
+            try:
+                _layer_cache[key] = layers_from_rho_thk(rho, thickness, key)
+            except ValueError as exc:
+                raise ForwardRejected(str(exc)) from exc
+        return _layer_cache[key]
+
+    layers = layers_at(eps_arr[0])
 
     rx_depths = np.asarray(rx_depth_m, dtype=float).reshape(-1)
     if rx_depths.size == 1:
@@ -287,6 +313,7 @@ def forward_1d_gains(
     hz = np.full((nfreq, nrx), np.nan, dtype=complex)
     used_empymod_fallback = False
     for ifreq, f in enumerate(freqs_hz):
+        layers = layers_at(eps_arr[ifreq])
         n_eff, lam_eff = resolve_quadrature(layers, float(f), n_nodes, lam_max)
         for depth in np.unique(rx_depths):
             mask = rx_depths == depth
@@ -320,7 +347,8 @@ def forward_1d_gains(
                         # silently, since the fallback only warns generically.
                         hx_fb, hz_fb = forward_empymod_line_gains(
                             rho, thickness, np.asarray([f]), off_x[mask], tx_depth_m,
-                            float(depth), eps_r, source_field=source_field,
+                            float(depth), float(eps_arr[ifreq]),
+                            source_field=source_field,
                         )
                     except Exception as fb_exc:
                         raise ForwardRejected(

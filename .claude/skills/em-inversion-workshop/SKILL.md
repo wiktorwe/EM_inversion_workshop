@@ -150,6 +150,34 @@ Use the metadata key directly. Do NOT fall back to a widget, and do NOT use
 broken setup instead of failing where it can be seen. The key list Step 01
 guarantees is in "`setup_metadata.json` IS the contract" below.
 
+### And NEVER collapse a per-dataset value to one band-wide scalar
+
+These keys DIFFER between datasets of a matrix, measured on the workshop survey:
+
+| key | 2 kHz | 4 kHz | 6 kHz |
+|---|---|---|---|
+| `eps_r_used` | 1198.3 | 599.2 | 399.4 |
+| `dx_model_target_m` | 1.40 | 0.95 | 0.80 |
+| `dt_model_target_s` | 7.68e-8 | 3.69e-8 | 2.54e-8 |
+| `f_min_hz` / `f_max_hz` / `flist_hz` | 2000 | 4000 | 6000 |
+| `nt_model`, `wavelet_*`, `pml_heuristic` | all differ | | |
+
+Reading ONE of those and applying it across the band is a silent systematic
+bias, not a rounding error. `eps_r_used` alone, taken from whichever dataset
+happened to be representative, put **0.91 sigma** of bias on Hx at 6 kHz - most
+of the assumed noise budget, on the best-resolved data in the survey - and
+improved the true-model chi-squared from 4.1457 to 3.9171 when fixed. It looks
+like a slightly poor fit, not a bug, which is exactly why it survived.
+
+`headless.matrix_setup(fwd_root)` is the ONE resolver: it returns `freqs`,
+`eps_r`, `f_min`, `n_periods_extract` all aligned per frequency, plus
+`by_source` / `meta_paths`. Steps 05 and 06 both use it. Do not hand-roll
+another.
+
+The analytic forward accepts `eps_r` as a scalar OR one value per frequency,
+and `inversion_1d` slices it with `freq_mask` so a multi-scale stage gets the
+right one.
+
 ## RULE 4 - CHANGE THE WHOLE CHAIN, OR DO NOT CHANGE IT
 
 **When you change anything that something else depends on, you change every
@@ -175,6 +203,7 @@ same edit that caused it:
 | Added `source_field` to `forward_1d_gains` | the empymod fallback still asked for `ab=44/64`, so a rejected Kz solve silently returned the **Kx** response | follow the new argument into every branch, including error paths |
 | Added the per-run acquisition matrix | `iter_datasets` passed legacy manifest entries through unnormalised, with no `source_field` key for consumers to index | define the contract (`DATASET_KEYS`) and make every producer satisfy it |
 | Made Step 05 matrix-aware | it kept `SETUP_META = <forward root>/setup_metadata.json`, a file that cannot exist on a matrix workspace - the lambda tuner died on it in front of the user | grep the notebook you edited for its OWN path constants, and run `chainsweep.py`, which fails on exactly this |
+| Built one dataset per frequency, each with its own `eps_r_used` | Steps 05/06 kept reading ONE `eps_r` and applying it to the whole band - 0.91 sigma of bias at 6 kHz, visible only as a slightly worse fit | list which metadata keys VARY across datasets, then grep every reader of each one |
 
 ### The checklist, before you call any change done
 

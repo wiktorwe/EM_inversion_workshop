@@ -90,6 +90,25 @@ def unpack_model_params(params, n_layers, z_start_rel, z_end_rel, snap_dz=None,
     return rho, thk, depth
 
 
+def _eps_for_freqs(eps_r, freqs_full, freq_mask):
+    """eps_r sliced to the SELECTED frequencies.
+
+    `eps_r` may be a scalar or one value per frequency of `tx_entry["freqs"]`.
+    A frequency subset (one stage of the multi-scale ladder) must slice it with
+    the same mask, or the analytic forward is evaluated at another frequency's
+    permittivity.
+    """
+    arr = np.asarray(eps_r, dtype=float).reshape(-1)
+    if arr.size == 1 or freq_mask is None:
+        return eps_r if arr.size == 1 else arr
+    m = np.asarray(freq_mask, dtype=bool)
+    if arr.size != m.size:
+        raise ValueError(
+            f"eps_r has {arr.size} entries but tx_entry has {m.size} frequencies"
+        )
+    return arr[m]
+
+
 def forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
                             n_nodes=120, freq_mask=None, snap_dz=None):
     """Analytic (Hx, Hz) complex channel gain for a candidate model, via
@@ -115,10 +134,12 @@ def forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, 
     # looped over unique receiver depths. `forward_1d_gains` now accepts the
     # array and does the same grouping.
     rx_depth_m = tx_z + np.asarray(tx_entry["off_z"], dtype=float)
-    freqs = np.asarray(tx_entry["freqs"], dtype=float)
+    freqs_full = np.asarray(tx_entry["freqs"], dtype=float)
+    freqs = freqs_full
     if freq_mask is not None:
-        freqs = freqs[np.asarray(freq_mask, dtype=bool)]
-    return forward_1d_gains(rho, thk, freqs, off_x, tx_z, rx_depth_m, eps_r, n_nodes=n_nodes)
+        freqs = freqs_full[np.asarray(freq_mask, dtype=bool)]
+    eps = _eps_for_freqs(eps_r, freqs_full, freq_mask)
+    return forward_1d_gains(rho, thk, freqs, off_x, tx_z, rx_depth_m, eps, n_nodes=n_nodes)
 
 
 def complex_gain_objective(
@@ -215,9 +236,11 @@ def forward_tensor_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, ep
     tx_z = float(tx_entry["tx_z"])
     off_x = np.asarray(tx_entry["off_x"], dtype=float)
     rx_depth_m = tx_z + np.asarray(tx_entry["off_z"], dtype=float)
-    freqs = np.asarray(tx_entry["freqs"], dtype=float)
+    freqs_full = np.asarray(tx_entry["freqs"], dtype=float)
+    freqs = freqs_full
     if freq_mask is not None:
-        freqs = freqs[np.asarray(freq_mask, dtype=bool)]
+        freqs = freqs_full[np.asarray(freq_mask, dtype=bool)]
+    eps = _eps_for_freqs(eps_r, freqs_full, freq_mask)
 
     unknown = [c for c in components if c not in TENSOR_COMPONENTS]
     if unknown:
@@ -226,7 +249,7 @@ def forward_tensor_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, ep
 
     out = {}
     for src in sorted({TENSOR_COMPONENTS[c][0] for c in components}):
-        hx, hz = forward_1d_gains(rho, thk, freqs, off_x, tx_z, rx_depth_m, eps_r,
+        hx, hz = forward_1d_gains(rho, thk, freqs, off_x, tx_z, rx_depth_m, eps,
                                   n_nodes=n_nodes, source_field=src)
         for c in components:
             s_c, r_c = TENSOR_COMPONENTS[c]
@@ -597,8 +620,18 @@ def load_tensor_features(dataset_dirs, freqs_hz=None, n_periods_extract=None):
             "obs_hx_gain": obs.get("Cxx"),
             "obs_hz_gain": obs.get("Cxz"),
         }
+    # Per-TRACE gains too, stacked in frequency order, so a caller that wants the
+    # `compute_gains_for_fd_outputs` shape (notebook 06's real-vs-synthetic
+    # comparison) does not have to re-extract - and cannot re-extract the whole
+    # band out of one per-frequency dataset, which is the bug this assembly
+    # exists to prevent.
+    gains = {}
+    for s_ in sources:
+        hx = np.stack([rows[(s_, float(f))]["Hx"] for f in freqs]).astype(complex)
+        hz = np.stack([rows[(s_, float(f))]["Hz"] for f in freqs]).astype(complex)
+        gains[s_] = {"Hx": hx, "Hz": hz}
     return {"tx_data": tx_data, "components": sorted(obs), "freqs": freqs,
-            "sources": sources, "geometry": geo_keep}
+            "sources": sources, "geometry": geo_keep, "gains": gains}
 
 
 def build_bounds(n_layers, log10_rho_min, log10_rho_max, log10_thk_min, log10_thk_max):
