@@ -131,7 +131,28 @@ geometry, which is why it is still here.
 
 ---
 
-## 7. Notebook 03's second code cell relies on an injected `display`
+## 7. Step 05 keeps its own `SETUP_META`, unlike every other notebook
+
+**Status: fixed for every current path, but structurally different.**
+
+Steps 02, 03, 04 and 06 all carry `_select_dataset`, which rebinds
+`FWD_2D_DIR`/`SETUP_META` onto a real dataset directory. Step 05 does not - it
+consumes the WHOLE matrix at once, so there is no "selected" dataset to bind
+to. It therefore resolves its metadata through `active_setup_meta()` and
+rebinds `SETUP_META` once at startup.
+
+That worked around a real failure (`FileNotFoundError:
+.../workspace/2D/forward/setup_metadata.json` from the lambda tuner, because on
+a matrix workspace the forward ROOT holds only subdirectories), but it leaves
+two different mechanisms in the repo for the same job.
+
+**Fix:** give `iter_datasets` a documented "representative dataset" accessor and
+have all five notebooks use it, instead of one rebinding globals and another
+resolving lazily.
+
+---
+
+## 8. Notebook 03's second code cell relies on an injected `display`
 
 **Status: harmless in Voila, a trap for anything headless.**
 
