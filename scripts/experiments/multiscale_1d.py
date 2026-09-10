@@ -152,7 +152,7 @@ def run_stage(tx_entry, cfg, freq_mask, *, reg_lambda, seed, maxiter, popsize,
     obj = lambda p: complex_gain_objective(
         p, tx_entry=tx_entry, n_layers=cfg["n_layers"],
         z_start_rel=cfg["z_start_rel"], z_end_rel=cfg["z_end_rel"], eps_r=cfg["eps_r"],
-        reg_lambda=reg_lambda, w_hxh=cfg["w_hxh"], w_hxhz=cfg["w_hxhz"],
+        reg_lambda=reg_lambda, w_cxx=cfg["w_Cxx"], w_cxz=cfg["w_Cxz"],
         sigma_hx=cal["sigma_hx"], sigma_hz=cal["sigma_hz"], C=cal["C"], freq_mask=freq_mask,
     )
     rng = np.random.default_rng(seed)
@@ -175,7 +175,7 @@ def full_band_chi2(params, tx_entry, cfg) -> float:
     mis = complex_gain_objective(
         params, tx_entry=tx_entry, n_layers=cfg["n_layers"],
         z_start_rel=cfg["z_start_rel"], z_end_rel=cfg["z_end_rel"], eps_r=cfg["eps_r"],
-        reg_lambda=0.0, w_hxh=cfg["w_hxh"], w_hxhz=cfg["w_hxhz"],
+        reg_lambda=0.0, w_cxx=cfg["w_Cxx"], w_cxz=cfg["w_Cxz"],
         sigma_hx=cal["sigma_hx"], sigma_hz=cal["sigma_hz"], C=cal["C"], freq_mask=None,
     )
     nrx = np.asarray(tx_entry["off_x"]).size
@@ -300,7 +300,7 @@ def main() -> int:
             "log10_rho_min": np.log10(float(meta["rho_min_ohm_m"])),
             "log10_rho_max": np.log10(float(meta["rho_max_ohm_m"])),
             "log10_thk_min": np.log10(5.0), "log10_thk_max": np.log10(50.0),
-            "w_hxh": 1.0, "w_hxhz": 1.0, "calibration": cal,
+            "w_Cxx": 1.0, "w_Cxz": 1.0, "calibration": cal,
             "tx_z": float(tx_entry["tx_z"]),
             "true_profile": true_profile(fwd, float(tx_entry["tx_x"])),
         }

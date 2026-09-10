@@ -202,7 +202,7 @@ def forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, 
 
 def complex_gain_objective(
     params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
-    reg_lambda, w_hxh, w_hxhz, sigma_hx, sigma_hz, C=None, freq_mask=None, snap_dz=None,
+    reg_lambda, w_cxx, w_cxz, sigma_hx, sigma_hz, C=None, freq_mask=None, snap_dz=None,
     snap_origin_m=None,
 ):
     """Complex-gain misfit: ((C*pred - obs)/sigma) summed in quadrature over
@@ -248,9 +248,9 @@ def complex_gain_objective(
 
     mis = 0.0
     if np.any(m1):
-        mis += float(w_hxh) * float(np.nansum(np.where(m1, np.abs(res_x) ** 2, np.nan)))
+        mis += float(w_cxx) * float(np.nansum(np.where(m1, np.abs(res_x) ** 2, np.nan)))
     if np.any(m2):
-        mis += float(w_hxhz) * float(np.nansum(np.where(m2, np.abs(res_z) ** 2, np.nan)))
+        mis += float(w_cxz) * float(np.nansum(np.where(m2, np.abs(res_z) ** 2, np.nan)))
 
     if reg_lambda > 0.0 and n_layers > 1:
         lrho = np.asarray(params[:n_layers], dtype=float)
@@ -427,9 +427,10 @@ def n_tensor_data(tx_entry, components=DEFAULT_COMPONENTS, freq_mask=None,
     `weights` must be the SAME per-component weights the misfit used
     (`component_weights`). `tensor_objective_parts` multiplies each component's
     residual sum by its weight, so a weighted misfit divided by an unweighted
-    count is not a reduced chi-squared at all - doubling `w_hxh` doubled the
-    reported chi2 without adding a single datum, under GUI text that reads
-    "chi2~1 means the fit matches the noise floor". With weights the divisor is
+    count is not a reduced chi-squared at all - doubling one component's weight
+    would double the reported chi2 without adding a single datum, under GUI
+    text that reads "chi2~1 means the fit matches the noise floor". With
+    weights the divisor is
     the EFFECTIVE count, `sum_c w_c * 2*nfreq*nrx`, which reduces to the plain
     count when every weight is 1 - so the default path is unchanged.
     """
@@ -568,14 +569,20 @@ def tensor_calibration(meta_paths):
 
 
 def component_weights(cfg):
-    """Per-component weights from the GUI's two knobs.
+    """One weight per TENSOR COMPONENT, from `cfg["w_Cxx"]` and friends.
 
-    `w_hxh` and `w_hxhz` weight the Hx- and Hz-RECEIVER components, whichever
-    source they came from, so the two historical knobs keep their meaning as the
-    tensor grows: `w_hxh` -> Cxx and Czx, `w_hxhz` -> Cxz and Czz.
+    The component is the right axis and the receiver is not. `Cxx` and `Czz`
+    are co-components carrying nearly all the amplitude; `Cxz` and `Czx` are
+    near-nulls in a layered Earth, which a 1D model cannot produce at all
+    (`KNOWN_ISSUES.md` section 5). Weighting by receiver ties `Cxx` to `Czx`
+    and `Cxz` to `Czz`, so neither near-null can be downweighted without
+    dragging a co-component with it - the one adjustment this knob exists to
+    make is the one it cannot express.
+
+    Missing keys default to 1.0, so a cfg that names no weights fits every
+    selected component equally.
     """
-    keys = {"HX": "w_hxh", "HZ": "w_hxhz"}
-    return {c: float(cfg.get(keys[recv], 1.0)) for c, (_src, recv) in TENSOR_COMPONENTS.items()}
+    return {c: float(cfg.get(f"w_{c}", 1.0)) for c in TENSOR_COMPONENTS}
 
 
 def analytic_tensor_calibration(cfg, tx_entry, components=DEFAULT_COMPONENTS):

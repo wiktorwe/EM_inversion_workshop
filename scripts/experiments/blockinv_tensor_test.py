@@ -96,7 +96,8 @@ def main() -> int:
             "dx": float(_meta["dx_model_target_m"]), "fd_order": int(_meta["fd_order"]),
             "log10_rho_min": 0.0, "log10_rho_max": np.log10(150.0),
             "log10_thk_min": np.log10(5.0), "log10_thk_max": np.log10(50.0),
-            "thk_min": 5.0, "reg_lambda": 500.0, "w_hxh": 1.0, "w_hxhz": 1.0,
+            "thk_min": 5.0, "reg_lambda": 500.0,
+            "w_Cxx": 1.0, "w_Cxz": 1.0, "w_Czx": 1.0, "w_Czz": 1.0,
             "seed": args.seed, "block_max_iter": args.block_iter,
             "components": tuple(components),
         }

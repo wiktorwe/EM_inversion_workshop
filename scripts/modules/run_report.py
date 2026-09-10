@@ -128,8 +128,8 @@ def build_1d_run_summary(
         "popsize": int(cfg["popsize"]) if cfg.get("popsize") is not None else None,
         "maxfun": int(cfg["maxfun"]) if cfg.get("maxfun") is not None else None,
         "block_max_iter": int(cfg["block_max_iter"]) if cfg.get("block_max_iter") is not None else None,
-        "w_hxh": float(cfg.get("w_hxh", 1.0)),
-        "w_hxhz": float(cfg.get("w_hxhz", 1.0)),
+        "component_weights": {c: float(cfg.get(f"w_{c}", 1.0))
+                              for c in ("Cxx", "Cxz", "Czx", "Czz")},
         "reg_lambda": float(cfg.get("reg_lambda", 0.0)),
         "misfit": [float(v) for v in misfit],
         "misfit_mean": [float(v) for v in misfit_mean],
@@ -175,9 +175,8 @@ def render_1d_run_report_md(summary: Mapping[str, Any]) -> str:
         f"- **Optimizer:** {summary.get('optimizer')}",
         f"- **maxiter / popsize / maxfun:** {summary.get('maxiter')} / {summary.get('popsize')} / {summary.get('maxfun')}",
         f"- **block_max_iter:** {summary.get('block_max_iter')}",
-        f"- **Weights (by RECEIVER, spanning both sources):** "
-        f"w_hxh={summary.get('w_hxh')} (Cxx, Czx), "
-        f"w_hxhz={summary.get('w_hxhz')} (Cxz, Czz)",
+        "- **Component weights:** " + ", ".join(
+            f"{c}={v}" for c, v in (summary.get("component_weights") or {}).items()),
         f"- **Tikhonov lambda:** {summary.get('reg_lambda')}",
         "",
         "## Calibration (global C from notebook 02)",
@@ -273,8 +272,9 @@ def format_run_parameters_html(summary: Mapping[str, Any]) -> str:
         ("n_layers", summary.get("n_layers")),
         ("background_rho", summary.get("background_rho")),
         ("eps_r_used", summary.get("eps_r_used")),
-        ("w(rx Hx) -> Cxx,Czx / w(rx Hz) -> Cxz,Czz",
-         f"{summary.get('w_hxh')} / {summary.get('w_hxhz')}"),
+        ("Component weights",
+         " / ".join(f"{c}={v}" for c, v
+                    in (summary.get("component_weights") or {}).items())),
         ("Tikhonov λ", summary.get("reg_lambda")),
         ("Rho bounds", f"[{summary.get('rho_min')}, {summary.get('rho_max')}]"),
         ("Depth window", f"[{summary.get('z_start')}, {summary.get('z_end')}]"),

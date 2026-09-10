@@ -160,9 +160,9 @@ about it). Neither limits this survey - chi2 0.03 is far inside the noise floor
 
 ---
 
-## 5. A 1D inversion cannot fit the cross-couplings, and the old sigma hid it
+## 5. A 1D inversion cannot fit the cross-couplings
 
-**Status: measured, and it changes how a documented result should be read.**
+**Status: measured. Unfixed by choice - the fix is a modelling decision.**
 
 `Cxz` and `Czx` are near-nulls in a layered Earth: a 1D model predicts them
 essentially zero. In the production data they are NOT zero - they are created by
@@ -170,9 +170,8 @@ the 2D fault structure, which is exactly why `experiments/lookahead.py` uses
 them to see ahead of the bit. So a 1D inversion is being asked to fit data its
 model class cannot produce.
 
-This was invisible while `sigma` came from the FDTD calibration fit, because
-that sigma was **larger than the datum itself** on those components. Measured on
-the rebuilt matrix, transmitter 0, near receiver:
+A FITTED sigma hides this, because on those components it is **larger than the
+datum itself**. Measured on the rebuilt matrix, transmitter 0, near receiver:
 
 | component | \|obs\| | sigma, fitted | sigma, analytic budget | ratio |
 |---|---|---|---|---|
@@ -181,26 +180,28 @@ the rebuilt matrix, transmitter 0, near receiver:
 | **Cxz 2 kHz** | **9.11e-05** | **1.44e-04** | 6.09e-06 | **24x** |
 | **Czx 2 kHz** | **8.90e-05** | **1.05e-04** | 1.14e-06 | **92x** |
 
-On the co-components the two agree within a factor 0.3-1.4 - the budget is
-sound. On the cross-couplings the fitted sigma EXCEEDS the signal, i.e. the old
-calibration was quietly saying "these are noise, ignore them". That is the
-near-null artifact of §6 doing real damage: the components were nominally being
-fitted and effectively were not.
+On the co-components the two agree within a factor 0.3-1.4, so the budget is
+sound. On the cross-couplings the fitted sigma EXCEEDS the signal - it says
+"these are noise, ignore them", so those components are nominally fitted and
+effectively are not. That is the near-null geometry of §8 doing real damage.
 
-With an honest sigma they carry their true weight, and the 1D fit to them is bad
-- reduced chi-squared **342** over all four components against **1.79** with the
-old sigma. The data is not worse; the model is inadequate, and now says so.
+The analytic budget gives them their true weight, and the 1D fit to them is then
+bad: reduced chi-squared **342** over all four components, against **1.79** under
+the fitted sigma. The data is no worse; the model is inadequate and now says so.
 
-**What this means for a claim already in the docs.** The skill and notebook 05
-record that fitting all four components improves both criteria (chi2 0.7596 vs
-0.8140). That comparison was made with a sigma that made the cross-couplings
-nearly weightless, so it mostly measured nothing. It needs re-running before it
-is quoted again.
+**A claim elsewhere in the docs rests on the fitted sigma.** The skill and
+notebook 05 record that fitting all four components improves both criteria
+(chi2 0.7596 vs 0.8140). That comparison was made where the cross-couplings were
+nearly weightless, so it measured little. Re-run it before quoting it.
 
-**Fix - not attempted, because it is a modelling decision, not a bug:** either
-exclude the cross-couplings from the 1D objective (they are a 2D observable), or
-add a model-inadequacy term to their sigma. Inventing that term without deriving
-it would just rebuild the thing this change removed.
+**Fix - a modelling decision, not a bug, so it is left to the user.** Notebook
+05 weights each tensor component separately (`w Cxx` ... `w Czz` -> the cfg's
+`w_Cxx` ... `w_Czz`, `inversion_1d.component_weights`), so excluding the
+cross-couplings is `w Cxz = w Czx = 0`, and the reduced chi-squared follows,
+because `n_tensor_data` divides by the weighted count. What is NOT provided is
+the other option - a model-inadequacy term added to their sigma. Inventing that
+term without deriving it would rebuild exactly what the analytic budget
+removed: a noise estimate that is really a fudge factor.
 
 ---
 
@@ -232,10 +233,9 @@ Until then the notebooks point at `README.md`, which is current.
 
 **Status: parses, never checked.**
 
-`mod3d.cfg` used to be rejected outright by current rockem-suite (the retired
-`A` anisotropy key); that is fixed and it now parses. But no Green's-function
-validation has ever been run against `mpiEmmodADI3d` from this workshop. Treat
-2D TE as the only supported path.
+`mod3d.cfg` parses, but no Green's-function validation has ever been run
+against `mpiEmmodADI3d` from this workshop. Treat 2D TE as the only supported
+path.
 
 ---
 
