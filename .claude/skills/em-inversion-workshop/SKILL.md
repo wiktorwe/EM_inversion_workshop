@@ -31,7 +31,7 @@ It is written here because the opposite reasoning had already reached
 argued that fixing it "changes the forward model and so invalidates every
 dataset and calibration on disk. That is why it is not in the quick-fix set."
 That was the ONLY thing keeping it unfixed. The fix took minutes once the
-excuse was dropped, and the true-model chi-squared went 0.0660 -> 0.0296.
+excuse was dropped, and it measurably improved the recovered model.
 
 So:
 
@@ -595,10 +595,13 @@ previous one; every arrow is a place a change can break something.
   (`calibration_for_inversion_multi`, and `resolve_tensor_calibration` accepts a
   per-source mapping of metadata lists). Reusing one dataset's C across a band
   it was not fitted on is a real error, not a rounding one.
-- **every available tensor component is fitted.** The component selector is
-  gone: if Step 01 built a Kz dataset, the full 2x2 tensor is what gets
-  inverted. Fitting a subset of what was acquired throws data away, and the
-  cross-couplings improve both criteria (chi2 0.7596 vs 0.8140).
+- **every available tensor component is fitted.** If Step 01 built a Kz
+  dataset, the full 2x2 tensor is what gets inverted. Fitting a subset of what
+  was acquired throws data away, and it costs nothing to include a component
+  that carries little: `sigma` is the error budget on the SOURCE'S FIELD SCALE
+  (`inversion_1d.amplitude_scale`), so a near-null datum contributes in
+  proportion to how far it stands above the field's own error - which for the
+  shipped colinear survey is almost not at all.
 - **writes** `workspace/1D/inversion/Run{N}/`: `REPORT.md`,
   `analytic_1d_inversion_summary.json`, `run_metadata.json`
 - **key chain facts**
@@ -785,10 +788,11 @@ all of `scripts/experiments/`}
 - **Candidate interfaces are snapped onto EACH FREQUENCY's own grid.**
   `analytic_1d_forward.snap_interfaces_to_grid`, through `forward_1d_gains`,
   keyed on `(eps_r, snap_dz, snap_origin_m)`. One grid for a joint fit is right
-  for one tone and wrong for the rest. Measured on the true model over 5 Tx and
-  all four tensor components: reduced chi-squared 0.0660 unsnapped, **0.0296**
-  snapped. The deepest interior interface is the pinned depth-window edge and is
-  not fitted, so it is not snapped (`pin_last`).
+  for one tone and wrong for the rest. The evidence is the RECOVERED MODEL, not
+  the true-model chi-squared, which does not separate the two - see
+  `KNOWN_ISSUES.md` section 4 for both tables. The deepest interior interface is
+  the pinned depth-window edge and is not fitted, so it is not snapped
+  (`pin_last`).
 - **`C(f)` is COMPUTED, not fitted: `C = dx*dz*s(order)`.** The engine injects
   the wavelet into one cell as `H += (dt/MU)*wav`, which represents `K*delta`
   integrated over that cell, so the moment is `wav*dx*dz`; `s = sum c_n(2n+1)`

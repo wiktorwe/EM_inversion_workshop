@@ -127,8 +127,13 @@ same true interface at 6020.5 m lands at 6020.1 / 6020.875 / 6020.8 m in the
 
 | | reduced chi2 |
 |---|---|
-| true model, no snapping | 0.0660 |
-| true model, snapped per frequency | **0.0296** |
+| true model, no snapping | 0.0239 |
+| true model, snapped per frequency | 0.0244 |
+
+**The true-model chi-squared does not decide this**, and it is recorded here so
+nobody re-derives a conclusion from it: with `sigma` on the source's field
+scale the two are the same number to within the spread across transmitters. The
+evidence for snapping is the RECOVERED MODEL, below.
 
 **Snapping is required, and the error budget is not a substitute for it.**
 Measured on the co-components (`scripts/experiments/sigma_budget_ab.py`, 3 Tx,
@@ -204,54 +209,46 @@ offset makes them the same size as the co-component, with no layering at all.**
 The reason they carry little 1D information on this survey is that it sits on
 the one geometry that suppresses them.
 
-Two consequences follow, and neither is "the model class is wrong":
+On the shipped production data the cross-couplings sit at 7e-4 to 1.3e-3 of
+their co-components, which is where an almost-symmetric Earth read on the
+symmetry plane puts them.
 
-1. **The cross-couplings measured on this survey are dominated by whatever is
-   NOT 1D** - which is why `experiments/lookahead.py` can use them to see the
-   fault ahead of the bit. On a depth-offset survey they would carry 1D
-   structure as well, and would no longer be a pure 2D indicator.
-2. **The fit to them is bad because the datum is tiny, not because it is
-   unpredictable in principle.**
+**This costs the inversion nothing, and must not.** `sigma` for every component
+of a source is the relative error budget applied to that SOURCE'S FIELD SCALE
+(`inversion_1d.amplitude_scale`), not to the component's own magnitude - a
+half-cell interface move or the `(dx/r)^2` kernel error perturbs the field at
+the receiver, and the field is the co-component. So a near-null datum is
+compared against the error of the field it lives in, and contributes what it
+should. Measured at Tx 0, 2 kHz, cost in chi-squared of being wrong by 100 % of
+the component:
 
-A FITTED sigma hides all of this, because on those components it is **larger than the
-datum itself**. Measured on the rebuilt matrix, transmitter 0, near receiver:
+| component | \|obs\| | sigma | chi2 per datum |
+|---|---|---|---|
+| Cxx | 1.05e-01 | 1.34e-03 | 6.1e+03 |
+| Czz | 1.20e-01 | 7.99e-03 | 2.2e+02 |
+| Cxz | 9.11e-05 | 7.00e-03 | **1.7e-04** |
+| Czx | 8.90e-05 | 1.53e-03 | **3.4e-03** |
 
-| component | \|obs\| | sigma, fitted | sigma, analytic budget | ratio |
-|---|---|---|---|---|
-| Cxx 2 kHz | 1.05e-01 | 1.93e-03 | 1.34e-03 | 1.4x |
-| Czz 2 kHz | 1.20e-01 | 2.33e-03 | 7.99e-03 | 0.3x |
-| **Cxz 2 kHz** | **9.11e-05** | **1.44e-04** | 6.09e-06 | **24x** |
-| **Czx 2 kHz** | **8.90e-05** | **1.05e-04** | 1.14e-06 | **92x** |
+The true model confirms it end to end: reduced chi-squared **0.0239** over 5 Tx
+and all four components (`scripts/experiments/true_model_check.py`), of which
+Cxx contributes 0.083 and the two cross-couplings 0.001 and 0.010. The fit is
+driven by the components carrying signal, and the near-nulls neither help nor
+hurt until they rise above the field's own error.
 
-On the co-components the two agree within a factor 0.3-1.4, so the budget is
-sound. On the cross-couplings the fitted sigma EXCEEDS the signal - it says
-"these are noise, ignore them", so those components are nominally fitted and
-effectively are not. That is the near-null geometry of §8 doing real damage.
+**What is left is an acquisition observation, not a defect.** Because these
+components are suppressed here, they carry little 1D information, and what is
+in them is mostly NOT 1D - which is exactly why `experiments/lookahead.py` uses
+them to see the fault ahead of the bit. Giving the receivers a few metres of
+depth offset would make them full-sized 1D observables, and would remove the
+lopsided quantisation floor in section 8 at the same time. Nothing in the
+workshop forbids it: `forward_1d_gains` takes per-receiver depths, and the
+analytic and FDTD paths both handle it.
 
-The analytic budget gives them their true weight, and the 1D fit to them is then
-bad: reduced chi-squared **342** over all four components, against **1.79** under
-the fitted sigma. The data is no worse - the fit is being scored honestly against
-a near-null datum for the first time.
-
-**A claim elsewhere in the docs rests on the fitted sigma.** The skill and
-notebook 05 record that fitting all four components improves both criteria
-(chi2 0.7596 vs 0.8140). That comparison was made where the cross-couplings were
-nearly weightless, so it measured little. Re-run it before quoting it.
-
-**The real fix is acquisition: give the receivers a depth offset.** A few metres
-is enough (table above), and it also removes the near-null the Step 02 validation
-sits on - see section 8, which is the same geometry problem seen from the
-calibration side. Nothing in the workshop forbids it: `forward_1d_gains` takes
-per-receiver depths, and the analytic and FDTD paths both handle it.
-
-**Until then, weight the components.** Notebook 05 weights each tensor component
-separately (`w Cxx` ... `w Czz` -> the cfg's `w_Cxx` ... `w_Czz`,
-`inversion_1d.component_weights`), so excluding the cross-couplings is
-`w Cxz = w Czx = 0`, and the reduced chi-squared follows, because
-`n_tensor_data` divides by the weighted count. What is deliberately NOT provided
-is a model-inadequacy term added to their sigma: inventing that term without
-deriving it would rebuild exactly what the analytic budget removed, a noise
-estimate that is really a fudge factor.
+Notebook 05 can also weight each tensor component directly (`w Cxx` ... `w Czz`
+-> the cfg's `w_Cxx` ... `w_Czz`, `inversion_1d.component_weights`) if you want
+to exclude a component outright; `n_tensor_data` divides by the weighted count,
+so the reduced chi-squared follows. That is a preference, not a correction -
+the budget already gives every component its right weight.
 
 ---
 
@@ -336,26 +333,24 @@ machine (see the timing note in `lookahead.py`); nothing else blocks it.
 
 ---
 
-## 9. The true-model fit depends strongly on the calibration Earth
+## 9. The FITTED calibration path is sensitive to its reference Earth
 
-**Status: measured. The entry that used to be here - "the TRUE model does not
-fit", reduced chi-squared 3.92 - was about a matrix calibrated with
-`homogeneous_rho_min` at 1 Ohm-m, and it no longer describes any workspace this
-repo builds.**
+**Status: measured. Affects the `calibration_source="fitted"` escape hatch only,
+not the inversion.**
 
-`scripts/run_matrix.py` defaults to `lateral_average_true`, and on a matrix
-calibrated that way the workshop's strongest self-check passes comfortably:
-reduced chi-squared **0.0296** over 5 Tx and all four tensor components
-(`scripts/experiments/true_model_check.py`), against 3.92 for the
-homogeneous-calibrated matrix. The first of the three candidates listed in the
-old entry - the calibration Earth - was therefore the main term, and
-`homogeneous_rho_min` at 1 Ohm-m against a ~30 Ohm-m production model is simply
-the wrong reference.
+The inversion computes `C` and its error budget
+(`inversion_1d.resolve_tensor_calibration` defaults to `"analytic"`), so no
+calibration Earth enters it at all. On that path the workshop's strongest
+self-check passes comfortably: reduced chi-squared **0.0239** over 5 Tx and all
+four tensor components (`scripts/experiments/true_model_check.py`, which also
+defaults to the analytic calibration).
 
-**So: calibrate with `lateral_average_true`.** `homogeneous_rho_min` remains
-available and is much cheaper, but a workspace calibrated with it has not been
-re-measured since the resampling change, and the 3.92 above is the only number
-anyone has for it. Run the true-model check before trusting an inversion from
-one.
+The FITTED path is a different matter. Its `C` and `sigma` come from an FDTD run
+on a reference Earth, and that choice moves the answer: `lateral_average_true`
+gives 0.0296 where `homogeneous_rho_min` at 1 Ohm-m gives 3.92, against a
+~30 Ohm-m production model. **So if you use the escape hatch for an A/B, use
+`lateral_average_true`** - `scripts/run_matrix.py` already defaults to it.
+`homogeneous_rho_min` is much cheaper but is simply the wrong reference here,
+and the 3.92 is the only number anyone has measured for it.
 
 ---

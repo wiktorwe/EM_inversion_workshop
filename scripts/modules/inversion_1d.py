@@ -318,6 +318,44 @@ def forward_tensor_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, ep
     return out
 
 
+def amplitude_scale(tx_entry, components):
+    """The field scale each component's modelling error is measured against.
+
+    Returns `{source: [nfreq, nrx]}` - the largest `|obs|` among the components
+    that source produced, so every component of a source shares one scale.
+
+    WHY NOT EACH COMPONENT'S OWN AMPLITUDE. The modelling error on a component
+    is not proportional to that component. Moving an interface half a cell, or
+    the `(dx/r)^2` source/receiver kernel error, perturbs the FIELD at that
+    receiver, and the field is set by the co-component - which on a colinear
+    survey is ~1e3 times the cross-coupling (measured `|Cxz|/|Cxx|` = 8.7e-4 at
+    2 kHz). Scaling each component by its OWN magnitude turns the objective into
+    a sum of FRACTIONAL residuals: a near-null datum is then asked for the same
+    fractional accuracy as one a thousand times larger, and weighs on
+    chi-squared just as heavily. Measured at Tx 0, cost of being wrong by 100 %
+    of the component:
+
+        component     own-amplitude sigma     shared-scale sigma
+        Cxx 2 kHz              6127                   6127
+        Czx 2 kHz              6127                      0.0034
+
+    Tying every component of a source to that source's field scale is what makes
+    a near-null datum cost what it should - almost nothing - so the fit is
+    driven by the components that actually carry signal. That is the whole point
+    of inverting a tensor: the small components contribute when they rise above
+    the field's own error, and not before.
+    """
+    scale = {}
+    for c in components:
+        obs = tx_entry.get("obs", {}).get(c)
+        if obs is None:
+            continue
+        src = TENSOR_COMPONENTS[c][0]
+        a = np.abs(np.asarray(obs, dtype=complex))
+        scale[src] = a if src not in scale else np.maximum(scale[src], a)
+    return scale
+
+
 def tensor_objective_parts(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
                            reg_lambda, cal, components=DEFAULT_COMPONENTS, weights=None,
                            freq_mask=None, snap_dz=None, snap_origin_m=None):
@@ -352,6 +390,9 @@ def tensor_objective_parts(params, tx_entry, n_layers, z_start_rel, z_end_rel, e
     weights = weights or {}
     mis = 0.0
     any_finite = False
+    # One error scale per SOURCE, shared by both of its receiver components -
+    # see `amplitude_scale` for why it is not each component's own magnitude.
+    amp_scale = amplitude_scale(tx_entry, components)
     for comp in components:
         obs = tx_entry["obs"].get(comp)
         if obs is None:
@@ -364,8 +405,11 @@ def tensor_objective_parts(params, tx_entry, n_layers, z_start_rel, z_end_rel, e
         rel = (cal.get("sigma_rel") or {}).get(comp)
         if rel is not None:
             rel = np.asarray(rel, dtype=float)
-            sig = rel * np.abs(obs)
-            med = np.nanmedian(np.where(np.abs(obs) > 0, np.abs(obs), np.nan), axis=1)
+            amp = amp_scale.get(TENSOR_COMPONENTS[comp][0])
+            if amp is None:                      # a lone component: nothing to share with
+                amp = np.abs(obs)
+            sig = rel * amp
+            med = np.nanmedian(np.where(amp > 0, amp, np.nan), axis=1)
             med = np.where(np.isfinite(med), med, 1.0)[:, None]
             sig = np.maximum(sig, rel * med * 1e-2)
         else:
@@ -643,17 +687,21 @@ def analytic_tensor_calibration(cfg, tx_entry, components=DEFAULT_COMPONENTS):
             quant["HZ"][i] = q["HZ"][0]
 
     sigma_rel, sigma = {}, {}
+    amp_scale = amplitude_scale(tx_entry, comps)
     for c in comps:
         obs = tx_entry.get("obs", {}).get(c)
         if obs is None:
             continue
         recv = TENSOR_COMPONENTS[c][1]
+        # The ABSOLUTE sigma is the relative budget on the SOURCE's field scale,
+        # not on this component's own amplitude - `amplitude_scale` says why.
+        amp = amp_scale.get(TENSOR_COMPONENTS[c][0], np.abs(np.asarray(obs, dtype=complex)))
         # dx is per frequency, so the geometric term is too - build it row by row
         # rather than handing `sigma_budget` a single dx it would apply to the
         # whole band.
         rows_rel, rows_sig = [], []
         for i in range(freqs.size):
-            b = fem.sigma_budget(np.asarray(obs, dtype=complex)[i:i + 1], off_x,
+            b = fem.sigma_budget(amp[i:i + 1], off_x,
                                  float(dx[i]), order,
                                  quantisation_rel=np.asarray(quant[recv])[i])
             rows_rel.append(b["rel"][0])

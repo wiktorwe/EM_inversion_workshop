@@ -34,6 +34,7 @@ from scripts.modules.inversion_1d import (  # noqa: E402
     blocky_layers_from_trace,
     forward_tensor_for_tx,
     load_tensor_features,
+    analytic_tensor_calibration,
     tensor_calibration,
 )
 from scripts.modules.segy import read_resistivity_from_segy  # noqa: E402
@@ -76,8 +77,15 @@ def true_params_for_tx(segy_path, tx_x, tx_z, z_start_rel, z_end_rel):
 
 
 def chi2_for_tx(tx_entry, segy_path, eps_r, cal, components, window, snap=None):
-    """Reduced chi-squared of the TRUE model against this Tx's observed gains."""
+    """Reduced chi-squared of the TRUE model against this Tx's observed gains.
+
+    `cal` may be a mapping or a callable taking `tx_entry`. The analytic budget
+    is built from the transmitter's own data, so it cannot be shared across Tx
+    the way a fitted calibration can.
+    """
     z_start_rel, z_end_rel = window
+    if callable(cal):
+        cal = cal(tx_entry)
     params, n_layers = true_params_for_tx(
         segy_path, float(tx_entry.get("tx_x", 0.0)), float(tx_entry["tx_z"]),
         z_start_rel, z_end_rel)
@@ -90,7 +98,9 @@ def chi2_for_tx(tx_entry, segy_path, eps_r, cal, components, window, snap=None):
     per_comp = {}
     for c in components:
         obs = np.asarray(tx_entry["obs"][c], dtype=complex)
-        sig = np.asarray(cal["sigma"][c], dtype=float)[:, None]
+        sig = np.asarray(cal["sigma"][c], dtype=float)
+        if sig.ndim == 1:                       # per frequency -> broadcast over rx
+            sig = sig[:, None]
         C = np.asarray(cal["C"][TENSOR_COMPONENTS[c][0]], dtype=complex)[:, None]
         r = (C * pred[c] - obs) / sig
         s = float(np.sum(r.real ** 2 + r.imag ** 2))
@@ -109,19 +119,32 @@ def main() -> int:
     ap.add_argument("--z-end-rel", type=float, default=60.0)
     ap.add_argument("--n-tx", type=int, default=5, help="How many Tx to check.")
     ap.add_argument("--compare-snapping", action="store_true")
+    ap.add_argument("--calibration", choices=("analytic", "fitted"), default="analytic",
+                    help="analytic = the computed C and error budget the inversion "
+                         "uses; fitted = the FDTD calibration, for A/B only.")
     ap.add_argument("--out", default="workspace/2D/true_model_check.json")
     args = ap.parse_args()
 
     m = matrix_setup(Path(args.forward_dir))
     feats = load_tensor_features({s: v for s, v in m["by_source"].items()})
     components = tuple(feats["components"])
-    cal = tensor_calibration({s: [str(p) for p in v] for s, v in m["meta_paths"].items()})
+    if args.calibration == "analytic":
+        order = json.loads(
+            Path(m["meta_paths"][sorted(m["meta_paths"])[0]][0]).read_text())["fd_order"]
+        cfg = {"dx": m["dx"], "fd_order": int(order), "eps_r": m["eps_r"],
+               "components": components}
+        cal = lambda tx_entry: analytic_tensor_calibration(  # noqa: E731
+            cfg, tx_entry, components=components)
+    else:
+        cal = tensor_calibration(
+            {s: [str(p) for p in v] for s, v in m["meta_paths"].items()})
     window = (args.z_start_rel, args.z_end_rel)
 
     tx_ids = sorted(feats["tx_data"])[: max(1, args.n_tx)]
     print(f"components : {', '.join(components)}")
     print(f"frequencies: {', '.join(f'{f:g}' for f in m['freqs'])} Hz")
     print(f"eps_r      : {', '.join(f'{e:.1f}' for e in m['eps_r'])}")
+    print(f"calibration: {args.calibration}")
     print(f"true model read from {args.segy} (continuous depths)")
     print(f"depth window: {args.z_start_rel:g} .. {args.z_end_rel:g} m relative to Tx\n")
 
