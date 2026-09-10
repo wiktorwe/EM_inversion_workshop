@@ -14,8 +14,16 @@ The bug class this exists to catch, in full:
     sentence that has become false, so "4/4 PASS" was not evidence the
     application worked - and it was read as if it were.
 
-This closes that hole for the mechanical half: any identifier mentioned in
-prose, in backticks, that no longer exists anywhere in the code.
+Two checks:
+
+1. DEAD SYMBOLS - any identifier mentioned in prose, in backticks, that does not
+   exist anywhere in the code.
+2. TEMPORAL WORDS IN GUI TEXT - "now", "no longer", "used to", "instead of" and
+   friends, in anything a USER sees: markdown cells, `ipw.HTML`, `push_message`,
+   widget `description=`. GUI text says what a control does and how to use it;
+   it is not a changelog, and a user has no idea what it used to say. Rationale
+   and history belong in code comments, limitations in `KNOWN_ISSUES.md`,
+   parameter detail in `doc/gui_manual.tex`. See RULE 5 in the project skill.
 
 Prose means: markdown cells, `#` comments, docstrings, .md files, and the HTML
 strings the notebooks display to the user - the last being where this repo's
@@ -146,6 +154,38 @@ def prose_chunks():
                     yield f"{p.name} cell {ci}", m.group(0)
 
 
+TEMPORAL = re.compile(
+    r"\b(no longer|used to|previously|formerly|instead of|this replaces|"
+    r"replaced by|has changed|is now|are now|now reads|now uses|now computes|"
+    r"used to be|rather than before|as before|unlike before)\b", re.I)
+
+
+def gui_strings():
+    """(where, text) for every string a USER sees, from the notebooks."""
+    for p in sorted(ROOT.glob("*.ipynb")):
+        nb = json.loads(p.read_text())
+        for ci, c in enumerate(nb["cells"]):
+            if c["cell_type"] == "markdown":
+                yield f"{p.name} markdown cell {ci}", "".join(c["source"])
+                continue
+            try:
+                tree = ast.parse("".join(c["source"]))
+            except SyntaxError:
+                continue
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Call):
+                    fname = getattr(n.func, "attr", None) or getattr(n.func, "id", None)
+                    if fname in ("push_message", "HTML"):
+                        for a in ast.walk(n):
+                            if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                                yield f"{p.name} cell {ci} ({fname})", a.value
+                    for k in n.keywords:
+                        if k.arg in ("description", "placeholder") and \
+                           isinstance(k.value, ast.Constant) and \
+                           isinstance(k.value.value, str):
+                            yield f"{p.name} cell {ci} (widget label)", k.value.value
+
+
 def main() -> int:
     known = code_tokens()
     bad: list[str] = []
@@ -178,10 +218,24 @@ def main() -> int:
             seen.add(b)
             uniq.append(b)
 
+    timeless = []
+    for where, text in gui_strings():
+        m = TEMPORAL.search(text)
+        if m:
+            snippet = re.sub(r"\s+", " ", text).strip()[:110]
+            timeless.append(f'{where}: "{m.group(0)}" in GUI text -- {snippet}')
+
     for b in uniq:
         print("STALE " + b)
-    print(f"\nRESULT: {'PASS - every backticked symbol in prose exists' if not uniq else f'{len(uniq)} stale reference(s) in prose'}")
-    return 1 if uniq else 0
+    for t in dict.fromkeys(timeless):
+        print("TEMPORAL " + t)
+    n_bad = len(uniq) + len(dict.fromkeys(timeless))
+    if not n_bad:
+        print("\nRESULT: PASS - prose matches the code, and GUI text is timeless")
+    else:
+        print(f"\nRESULT: {len(uniq)} stale reference(s), "
+              f"{len(dict.fromkeys(timeless))} temporal word(s) in GUI text")
+    return 1 if n_bad else 0
 
 
 if __name__ == "__main__":

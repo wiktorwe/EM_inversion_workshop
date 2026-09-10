@@ -56,7 +56,8 @@ To restore a pristine checkout:
 ./clean.sh
 ```
 
-This deletes `workspace/` including `setup_metadata.json`, calibration, and all
-`OneDRunN/REPORT.md` files. Re-run Steps 01–02 afterwards (including a Calibrate
-button in Step 02) so later notebooks can remember frequencies, design
-parameters, and the active `C(f)`.
+This deletes `workspace/` including `setup_metadata.json`, the Step 02
+validation record, and all `Run{N}/REPORT.md` files. Re-run Step 01 afterwards
+so later notebooks can remember frequencies and design parameters. Step 02's
+validation is optional: `C(f)` is computed, so an uncalibrated workspace still
+inverts.

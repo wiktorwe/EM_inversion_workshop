@@ -406,6 +406,67 @@ Stale documentation in this repo has real cost, because both files are read as
 statements of fact about measured behaviour. If a number here cannot be
 reproduced by a script in `scripts/experiments/`, it should not be here.
 
+### GUI TEXT IS TIMELESS. It says what a control DOES, and nothing else.
+
+**Every string a user sees - markdown cells, `ipw.HTML`, `push_message`, widget
+`description=`, status text - describes the PURPOSE of the control and HOW TO
+USE IT. That is the whole brief.**
+
+Banned in user-facing text, without exception:
+
+- **Temporal words**: "now", "no longer", "used to", "previously", "formerly",
+  "instead of", "this replaces". The GUI is not a changelog. A user reading it
+  has no idea what it used to say and does not care.
+- **Change notes and rationale**: why something was replaced, what it was
+  before, what bug it fixed.
+- **Measured numbers** ("worst deviation 0.430 %", "chi2 0.0296"). Those are
+  measurements; they belong where measurements are recorded.
+- **Cross-references to `KNOWN_ISSUES.md` entries** by number.
+- **Limitations and current state.**
+
+Where each of those goes instead:
+
+| Content | Home |
+|---|---|
+| limitations, current state, "this is broken/partial" | `KNOWN_ISSUES.md` |
+| parameter meaning and impact, longer descriptions | `doc/gui_manual.tex` |
+| workflow, install, layout | `README.md` |
+| measured numbers and how they were obtained | `doc/numerics_findings.md` |
+| why the code is the way it is, and what it used to be | CODE COMMENTS - developer-facing, and RULE 4 wants that history kept |
+
+### AND DO NOT TRACK CHANGES IN DOCSTRINGS OR COMMENTS EITHER
+
+**Git already records what changed. A docstring that says "this used to be X"
+is a second history that nobody updates, and it MISLEADS THE NEXT READER -
+including the next agent, which reads docstrings as statements of fact.**
+
+That is not hypothetical. `get_global_calibration`'s docstring described a role
+the function had already lost, and was read as current. A docstring saying
+"this used to be `require_global_calibration`" also broke `docsweep` itself,
+because a symbol mentioned only in its own history looked defined.
+
+The line to draw:
+
+- **BANNED** - the past: "this used to be X", "was changed from", "previously
+  did Y", "the old version", "before the refactor".
+- **KEPT, and required** - the present-tense CONSTRAINT and its reason:
+  "windows on ABSOLUTE time, because production and calibration runs record at
+  different `dtrec`". That is not history; it is why the code must stay this
+  way, and deleting it invites the regression back.
+
+Test to apply: strip every clause about the past. If the comment still tells you
+what the code must do and why, it was a constraint - keep it. If nothing is
+left, it was a changelog entry - delete it, and let the commit message carry it.
+
+Where the history goes instead: the commit message, and - when it is a lesson
+that must not be repeated - RULE 4's breakage table in this file. One place, not
+scattered through the source.
+
+`scripts/dev/docsweep.py` checks user-facing strings for temporal words. Comments
+and docstrings are judged by the test above, not by regex, because a constraint
+and a changelog entry can use the same words.
+
+
 ## THE CHAIN, link by link
 
 Read this before editing anything. Each step CONSUMES the artifacts of the
@@ -518,7 +579,7 @@ previous one; every arrow is a place a change can break something.
   gone: if Step 01 built a Kz dataset, the full 2x2 tensor is what gets
   inverted. Fitting a subset of what was acquired throws data away, and the
   cross-couplings improve both criteria (chi2 0.7596 vs 0.8140).
-- **writes** `workspace/1D/inversion/OneDRun{N}/`: `REPORT.md`,
+- **writes** `workspace/1D/inversion/Run{N}/`: `REPORT.md`,
   `analytic_1d_inversion_summary.json`, `run_metadata.json`
 - **key chain facts**
   - the forward is `analytic_1d_forward.forward_1d_gains(source_field=...)`;
@@ -529,7 +590,7 @@ previous one; every arrow is a place a change can break something.
 ### Step 06 - 1D results
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
   `headless`, `run_report`, `segy`, `setup_defaults`
-- **reads** `OneDRun{N}/` summaries (including `run_metadata.json`'s
+- **reads** `Run{N}/` summaries (including `run_metadata.json`'s
   `data_convention`) + the forward data
 - **writes** `workspace/1D/results/` SEG-Y exports
 - **key chain facts**

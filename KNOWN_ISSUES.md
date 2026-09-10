@@ -204,7 +204,31 @@ it would just rebuild the thing this change removed.
 
 ---
 
-## 6. The 3D / ADI path is unvalidated
+## 6. The GUI manual describes an older version of the workshop
+
+**Status: stale, deliberately not updated yet.**
+
+`doc/gui_manual.tex` and the `gui_manual.pdf` built from it still describe:
+
+- two per-dataset **Calibrate** buttons, where there is one batch action with a
+  method dropdown;
+- `C(f)` being fitted in Step 02 and stored in `setup_metadata.json` for
+  Steps 05/06, where it is computed as `dx*dz*s(order)`;
+- a Kx-only analytic solver, where both Kx and Kz are used;
+- 1D run folders named `OneDRunN`, where they are `Run{N}`;
+- `Run modelling (background)` and the old `dataset` / `frequency` /
+  `component` view dropdowns.
+
+The PDF is the copy people read and it is not rebuilt by any script here, so a
+half-updated `.tex` beside a stale `.pdf` would be worse than a manual that is
+known-stale in one place. **It is left alone until the workshop reaches a stable
+release**, then rewritten and rebuilt in one pass.
+
+Until then the notebooks point at `README.md`, which is current.
+
+---
+
+## 7. The 3D / ADI path is unvalidated
 
 **Status: parses, never checked.**
 
@@ -215,7 +239,7 @@ validation has ever been run against `mpiEmmodADI3d` from this workshop. Treat
 
 ---
 
-## 7. Cxz-vs-Czx look-ahead distances are partly a threshold artifact
+## 8. Cxz-vs-Czx look-ahead distances are partly a threshold artifact
 
 **Status: a caveat on a reported result, not a bug.**
 
@@ -231,7 +255,7 @@ geometry, which is why it is still here.
 
 ---
 
-## 8. The true-model fit depends strongly on the calibration Earth
+## 9. The true-model fit depends strongly on the calibration Earth
 
 **Status: measured. The entry that used to be here - "the TRUE model does not
 fit", reduced chi-squared 3.92 - was about a matrix calibrated with

@@ -41,7 +41,7 @@ After enabling GPU forward, re-run **Step 01 → Finalize setup** so
   Step 02 run reports how far the fitted value lands from the computed one
   (measured worst 0.430 %, band 0.5 %).
 - **Step 05** writes a full per-run report under each
-  `workspace/1D/inversion/OneDRunN/` folder:
+  `workspace/1D/inversion/Run{N}/` folder:
   `REPORT.md` (human-readable), `analytic_1d_inversion_summary.json`, and
   `run_metadata.json` (optimizer, weights, bounds, frequencies, calibration).
   Step 06 loads those when you open a run — you do not need to remember what
@@ -132,7 +132,7 @@ Cleaning **does** delete remembered setup parameters and run reports:
 
 - `setup_metadata.json` (frequencies / design from Step 01)
 - the Step 02 validation record stored there (not needed to invert - C is computed)
-- every `OneDRunN/REPORT.md` and summary from Step 05
+- every `Run{N}/REPORT.md` and summary from Step 05
 
 After `./clean.sh`, re-run Step 01 before Steps 02-06. Step 02's validation is
 optional: `C(f)` is computed, so an uncalibrated workspace still inverts.

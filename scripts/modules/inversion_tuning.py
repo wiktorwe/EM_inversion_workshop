@@ -205,7 +205,7 @@ def run_de_once(cfg: Mapping[str, Any], tx_entry: Mapping[str, Any], seed: int) 
         snap_dz=cfg.get("snap_dz"),
         snap_origin_m=cfg.get("snap_origin_m"),
     )
-    n_data = n_tensor_data(tx_entry, components)
+    n_data = n_tensor_data(tx_entry, components, weights=weights)
     return {
         "success": bool(getattr(out, "success", True)),
         "seed": int(seed),

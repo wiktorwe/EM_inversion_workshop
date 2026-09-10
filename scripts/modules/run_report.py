@@ -98,7 +98,7 @@ def build_1d_run_summary(
     hz_path: Optional[str] = None,
     timestamp: Optional[str] = None,
 ) -> dict:
-    """Full machine-readable summary for OneDRunN."""
+    """Full machine-readable summary for Run{N}."""
     cal_block = calibration_summary_block(calibration)
     return {
         "run_dir": str(run_dir),
@@ -175,7 +175,9 @@ def render_1d_run_report_md(summary: Mapping[str, Any]) -> str:
         f"- **Optimizer:** {summary.get('optimizer')}",
         f"- **maxiter / popsize / maxfun:** {summary.get('maxiter')} / {summary.get('popsize')} / {summary.get('maxfun')}",
         f"- **block_max_iter:** {summary.get('block_max_iter')}",
-        f"- **Weights:** w_hxh={summary.get('w_hxh')}, w_hxhz={summary.get('w_hxhz')}",
+        f"- **Weights (by RECEIVER, spanning both sources):** "
+        f"w_hxh={summary.get('w_hxh')} (Cxx, Czx), "
+        f"w_hxhz={summary.get('w_hxhz')} (Cxz, Czz)",
         f"- **Tikhonov lambda:** {summary.get('reg_lambda')}",
         "",
         "## Calibration (global C from notebook 02)",
@@ -271,7 +273,8 @@ def format_run_parameters_html(summary: Mapping[str, Any]) -> str:
         ("n_layers", summary.get("n_layers")),
         ("background_rho", summary.get("background_rho")),
         ("eps_r_used", summary.get("eps_r_used")),
-        ("w_hxh / w_hxhz", f"{summary.get('w_hxh')} / {summary.get('w_hxhz')}"),
+        ("w(rx Hx) -> Cxx,Czx / w(rx Hz) -> Cxz,Czz",
+         f"{summary.get('w_hxh')} / {summary.get('w_hxhz')}"),
         ("Tikhonov λ", summary.get("reg_lambda")),
         ("Rho bounds", f"[{summary.get('rho_min')}, {summary.get('rho_max')}]"),
         ("Depth window", f"[{summary.get('z_start')}, {summary.get('z_end')}]"),

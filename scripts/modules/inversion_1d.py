@@ -425,14 +425,28 @@ def tensor_objective(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
     )[2]
 
 
-def n_tensor_data(tx_entry, components=DEFAULT_COMPONENTS, freq_mask=None):
-    """Real-valued datum count, for turning a misfit into a reduced chi-squared."""
+def n_tensor_data(tx_entry, components=DEFAULT_COMPONENTS, freq_mask=None,
+                  weights=None):
+    """Real-valued datum count, for turning a misfit into a reduced chi-squared.
+
+    `weights` must be the SAME per-component weights the misfit used
+    (`component_weights`). `tensor_objective_parts` multiplies each component's
+    residual sum by its weight, so a weighted misfit divided by an unweighted
+    count is not a reduced chi-squared at all - doubling `w_hxh` doubled the
+    reported chi2 without adding a single datum, under GUI text that reads
+    "chi2~1 means the fit matches the noise floor". With weights the divisor is
+    the EFFECTIVE count, `sum_c w_c * 2*nfreq*nrx`, which reduces to the plain
+    count when every weight is 1 - so the default path is unchanged.
+    """
     nrx = np.asarray(tx_entry["off_x"]).size
     nfreq = np.asarray(tx_entry["freqs"]).size
     if freq_mask is not None:
         nfreq = int(np.count_nonzero(np.asarray(freq_mask, dtype=bool)))
     present = [c for c in components if tx_entry.get("obs", {}).get(c) is not None]
-    return 2 * nfreq * nrx * len(present)      # complex -> 2 real numbers
+    per_comp = 2 * nfreq * nrx                 # complex -> 2 real numbers
+    if weights is None:
+        return per_comp * len(present)
+    return per_comp * float(sum(float(weights.get(c, 1.0)) for c in present))
 
 
 def _calibration_blocks(path, src):

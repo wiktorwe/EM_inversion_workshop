@@ -73,7 +73,7 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   survey offsets / apertx. Homogeneous path still uses a purpose-sized
   source-centred domain; lateral-average reuses production `rz0−tz0`.
 - `analytic_1d_forward.py`: 1D layered forward model for the workshop's
-  magnetic (Hx) line source, via rockem-suite's validated
+  magnetic line source (Kx or Kz), via rockem-suite's validated
   `magnetic_line_source_fields_layered` - used by `05_1d_inversion`'s
   inversion and by FDTD–analytic calibration. Replaces `empymod_1d_forward.py`
   (below).
@@ -182,7 +182,7 @@ confirms or falsifies it; none of them are imported by the notebooks.
   measured by evaluating the analytic solver at `eps_r_used` and at a physical
   `eps_r`. This is the measurement behind `eps_r_cap = 5000`.
 - `interface_snapping.py`: how far half a cell of interface quantisation moves
-  the data, against the calibrated noise floor - the evidence for and against
+  the data, against the analytic error budget - the evidence for and against
   turning `unpack_model_params(snap_dz=...)` on.
 - `multiscale_2d_run.py`: driver for the 2D frequency ladder. See
   `KNOWN_ISSUES.md` for why the head-to-head it exists for has not been run.
