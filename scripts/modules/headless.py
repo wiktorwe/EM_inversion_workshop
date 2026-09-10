@@ -260,8 +260,21 @@ def build_forward_inputs(out_dir: Path | str, p: SetupParams, *, verbose: bool =
         str(sg_raw), str(ep_raw), ep_value=eps_r_used, ny_samples=1,
     )
 
-    interpolate_rss_python(sg_raw, out_dir / "sg.rss", d1f=target_dx, d3f=target_dx, method="linear")
-    interpolate_rss_python(ep_raw, out_dir / "ep.rss", d1f=target_dx, d3f=target_dx, method="linear")
+    # NEAREST, not linear. A linear resample turns every material interface into
+    # a ONE-CELL RAMP whose effective depth is the ramp midpoint, which sits
+    # between cell faces - so the FD model's interface is not at any depth the
+    # 1D inversion's candidate model can be snapped to, and `C(f)` cannot absorb
+    # the difference (C is one complex number per frequency shared by every
+    # transmitter; the error is model- and depth-dependent). Nearest puts the
+    # interface exactly on a cell boundary. Measured on a 1 m -> 0.8 m resample
+    # of a 2/100 Ohm-m step: linear leaves one intermediate cell at 80.4 Ohm-m,
+    # nearest leaves none. `interpolate_rss_python` forces antialias off here.
+    #
+    # This changes the forward model, so datasets and calibrations built before
+    # it are NOT comparable with ones built after. Notebook 01 does the same two
+    # resamples in its own `on_apply_outputs`; the two must not diverge.
+    interpolate_rss_python(sg_raw, out_dir / "sg.rss", d1f=target_dx, d3f=target_dx, method="nearest")
+    interpolate_rss_python(ep_raw, out_dir / "ep.rss", d1f=target_dx, d3f=target_dx, method="nearest")
     interpolate_rss_python(wav_raw, out_dir / "wav2d.rss", d1f=target_dt, method="sinc")
     enforce_rss_min_value(out_dir / "sg.rss", min_value=1e-8)
     enforce_rss_min_value(out_dir / "ep.rss", min_value=1e-8)
@@ -765,6 +778,27 @@ def build_forward_matrix(
     return manifest
 
 
+def _sg_half_sample_origin(sg_path: Path, dx: float) -> float:
+    """One point of the lattice a NEAREST-resampled model can put an interface on.
+
+    `sg.rss` samples sit at `oz + k*dz`, and a nearest resample makes an
+    interface a step BETWEEN two samples - so its effective depth is
+    `oz + (k + 1/2)*dz`. This returns `oz + dz/2`; anything congruent to it
+    modulo `dz` would do. Measured by
+    `scripts/experiments/interface_snapping.py`, which reports every FD
+    interface as 0.0000 m off this lattice.
+
+    Falls back to `dx/2` when the model has not been written yet, so a workspace
+    that Step 01 has not finished still resolves rather than raising here.
+    """
+    try:
+        from scripts.modules.multiscale_2d import read_sg_grid
+        z = np.asarray(read_sg_grid(sg_path)["z"], dtype=float)
+        return float(z[0] + 0.5 * (z[1] - z[0])) if z.size > 1 else float(z[0])
+    except Exception:                                   # noqa: BLE001
+        return 0.5 * float(dx)
+
+
 def matrix_setup(out_root: Path | str) -> dict:
     """Everything Step 01 decided, resolved across the WHOLE acquisition matrix.
 
@@ -782,6 +816,13 @@ def matrix_setup(out_root: Path | str) -> dict:
         eps_r        `eps_r_used` per frequency, aligned with `freqs`
         f_min        `f_min_hz` per frequency, aligned with `freqs`
         n_periods_extract   per frequency, aligned with `freqs`
+        dx           `dx_model_target_m` per frequency, aligned with `freqs`
+        snap_origin_m  one point of the lattice of interface depths that
+                     frequency's FD model can actually represent, `oz + dz/2`.
+                     `sg.rss` is resampled with NEAREST, so an interface is a
+                     step between two samples and its effective depth is their
+                     midpoint. The 1D inversion snaps candidate interfaces onto
+                     this - see `analytic_1d_forward.snap_interfaces_to_grid`.
         representative      a metadata path that EXISTS, for scalar defaults
         single       True when there is nothing to assemble (one dataset)
     """
@@ -799,11 +840,14 @@ def matrix_setup(out_root: Path | str) -> dict:
             (Path(d["run_dir"]) / "setup_metadata.json").read_text())
         src = str(d.get("source_field", "HX")).upper()
         by_source.setdefault(src, []).append((float(meta["flist_hz"][0]), Path(d["run_dir"])))
+        dx = float(meta["dx_model_target_m"])
         for f in meta["flist_hz"]:
             rows.setdefault(float(f), {
                 "eps_r": float(meta["eps_r_used"]),
                 "f_min": float(meta["f_min_hz"]),
                 "n_periods_extract": float(meta["n_periods_extract"]),
+                "dx": dx,
+                "snap_origin_m": _sg_half_sample_origin(Path(d["run_dir"]) / "sg.rss", dx),
             })
     for src in by_source:
         by_source[src] = [p for _f, p in sorted(by_source[src], key=lambda t: t[0])]
@@ -819,9 +863,99 @@ def matrix_setup(out_root: Path | str) -> dict:
         "f_min": np.asarray([rows[float(f)]["f_min"] for f in freqs], dtype=float),
         "n_periods_extract": np.asarray(
             [rows[float(f)]["n_periods_extract"] for f in freqs], dtype=float),
+        "dx": np.asarray([rows[float(f)]["dx"] for f in freqs], dtype=float),
+        "snap_origin_m": np.asarray(
+            [rows[float(f)]["snap_origin_m"] for f in freqs], dtype=float),
         "representative": rep,
         "single": len(ds) < 2,
     }
+
+
+@dataclass(frozen=True)
+class DatasetPaths:
+    """Every file that belongs to ONE dataset, resolved from its run directory.
+
+    THE PATH-BINDING CONTRACT, in one place. On an acquisition-matrix workspace
+    the forward ROOT holds only `manifest.json` and one subdirectory per
+    dataset, so none of these files exists at the root - they all belong to a
+    dataset. Notebooks 02/03/04/05/06 each used to re-join them by hand and
+    rebind them through a per-notebook `global` list inside `_select_dataset`.
+    That list was hand-maintained, and forgetting to extend it is exactly how
+    `SETUP_META = <forward root>/setup_metadata.json` shipped and killed Step
+    05's lambda tuner in front of a user. A second instance (`SG_TRUE_PATH`)
+    survived the fix and was only found when `chainsweep.py` was written; a
+    third (`FDMODEL_DATA_DIR` in notebook 05) was never rebound at all.
+
+    So there is one mechanism now: a notebook holds a single `DS` and reads
+    `DS.setup_meta`, `DS.hx`, ... There is no per-notebook list to forget.
+
+    `chainsweep.py` walks the attributes of objects like this one, not just
+    bare `Path` globals - keep it that way or the invariant stops being tested.
+    """
+
+    dir: Path
+    setup_meta: Path
+    sg: Path
+    ep: Path
+    wav2d: Path
+    survey: Path
+    mod_cfg: Path
+    runmod: Path
+    clean_sh: Path
+    mpiqueue_log: Path
+    data_dir: Path
+    hx: Path
+    hz: Path
+    processed_dir: Path
+    amp_phase_npz: Path
+
+
+def dataset_paths(run_dir: Path | str) -> DatasetPaths:
+    """Resolve every per-dataset artifact under ``run_dir``.
+
+    Pure path arithmetic - nothing is required to exist, because a notebook
+    binds these before Step 01 or Step 02 has produced them. Calibration
+    directories are NOT here: `fdtd_analytic_calibration.calibration_run_dir`
+    takes a method as well as a directory, so it stays where it is and is
+    called with `DS.dir`.
+    """
+    d = Path(run_dir)
+    data = d / "Data"
+    processed = data / "processed"
+    return DatasetPaths(
+        dir=d,
+        setup_meta=d / "setup_metadata.json",
+        sg=d / "sg.rss",
+        ep=d / "ep.rss",
+        wav2d=d / "wav2d.rss",
+        survey=d / "Survey.rss",
+        mod_cfg=d / "mod.cfg",
+        runmod=d / "runmod.sh",
+        clean_sh=d / "clean.sh",
+        mpiqueue_log=d / "mpiqueue.log",
+        data_dir=data,
+        hx=data / "Hxshot.rss",
+        hz=data / "Hzshot.rss",
+        processed_dir=processed,
+        amp_phase_npz=processed / "amp_phase_results.npz",
+    )
+
+
+def select_dataset(out_root: Path | str, name: str | None = None):
+    """`(entry, DatasetPaths)` for one dataset of ``out_root``, by name.
+
+    Falls back to the first dataset when ``name`` does not match, and to the
+    root itself when there are no datasets at all - so a workspace that Step 01
+    has not written yet still binds to something rather than raising at import.
+    Every notebook's dataset selector goes through this.
+    """
+    try:
+        ds = iter_datasets(out_root)
+    except Exception:                                   # noqa: BLE001
+        ds = []
+    chosen = next((d for d in ds if d["name"] == name), ds[0]) if ds else None
+    run_dir = Path(chosen["run_dir"]) if chosen else Path(out_root)
+    return chosen, dataset_paths(run_dir)
 
 
 # Keys every `iter_datasets` entry is guaranteed to carry. Consumers (notebooks
@@ -872,6 +1006,9 @@ def iter_datasets(out_root: Path | str) -> list[dict]:
 
 
 __all__ = [
+    "DatasetPaths",
+    "dataset_paths",
+    "select_dataset",
     "DATASET_KEYS",
     "SOURCE_TYPE_CODES",
     "build_forward_matrix",

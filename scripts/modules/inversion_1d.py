@@ -25,33 +25,23 @@ from scripts.modules.analytic_1d_forward import ForwardRejected, forward_1d_gain
 _REJECT_COST = 1e12
 
 
-def unpack_model_params(params, n_layers, z_start_rel, z_end_rel, snap_dz=None,
-                        snap_origin_rel=0.0):
+def unpack_model_params(params, n_layers, z_start_rel, z_end_rel):
     """(rho, thickness, interface depths) from the optimiser's parameter vector.
 
     Resistivities are optimised in log10 space; thicknesses too, then rescaled
     so they exactly fill the `[z_start_rel, z_end_rel]` window - so the depth
     window is a hard constraint rather than something the optimiser can drift
-    out of.
+    out of, and the total span is a CONSTANT of the run rather than a property
+    of the candidate.
 
-    `snap_dz` snaps the resulting interface depths onto a grid of that spacing
-    (relative to `snap_origin_rel`). This exists because the inversion fits a
-    CONTINUOUS-interface analytic forward against FDTD data whose interfaces are
-    quantised onto the FD grid, a systematic depth error of up to half a cell
-    that `C(f)` cannot absorb (C is one complex number per frequency, shared by
-    every transmitter; this error is model- and depth-dependent). Snapping puts
-    the candidate model on the same footing as the data.
-
-    Default is `None` (no snapping), because whether it is worth doing depends
-    on whether half a cell moves the data by more than the noise floor - measure
-    it with `scripts/experiments/interface_snapping.py` on your own geometry
-    before switching it on, and re-fit the calibration afterwards.
-
-    Snapping is applied to the interface DEPTHS and the thicknesses are then
-    recomputed from them, so the two stay consistent; the window endpoints are
-    preserved, and interfaces are kept strictly increasing (a snap that would
-    collapse two interfaces onto the same cell face is nudged one cell apart
-    rather than producing a zero-thickness layer the solver would reject).
+    This used to take `snap_dz`/`snap_origin_rel` and snap the interface depths
+    onto one grid, in the tx-RELATIVE frame. Snapping now lives in
+    `analytic_1d_forward.snap_interfaces_to_grid` and is applied inside
+    `forward_1d_gains`, in ABSOLUTE depth and PER FREQUENCY, because each
+    dataset of an acquisition matrix resamples the same `sg.rss` on its own `dx`
+    and so quantises the same true interface to a different depth (measured
+    6020.1 / 6020.875 / 6020.8 m at 2/4/6 kHz for a true interface at 6020.5 m).
+    One relative grid could only ever be right for one tone of a joint fit.
     """
     p = np.asarray(params, dtype=float)
     lrho = p[:n_layers]
@@ -72,45 +62,110 @@ def unpack_model_params(params, n_layers, z_start_rel, z_end_rel, snap_dz=None,
     if thk_raw.size > 0:
         thk = thk_raw / np.sum(thk_raw) * span
         depth = float(z_start_rel) + np.cumsum(thk)
-        if snap_dz is not None and float(snap_dz) > 0.0:
-            d = float(snap_dz)
-            snapped = np.round((depth - float(snap_origin_rel)) / d) * d + float(snap_origin_rel)
-            # keep strictly increasing and inside the window
-            lo, hi = float(z_start_rel), float(z_end_rel)
-            for i in range(snapped.size):
-                floor_i = lo + (i + 1) * d
-                if i > 0:
-                    floor_i = max(floor_i, snapped[i - 1] + d)
-                snapped[i] = min(max(snapped[i], floor_i), hi - (snapped.size - i) * d)
-            depth = snapped
-            thk = np.diff(np.concatenate([[lo], depth]))
     else:
         thk = np.array([], dtype=float)
         depth = np.array([], dtype=float)
     return rho, thk, depth
 
 
-def _eps_for_freqs(eps_r, freqs_full, freq_mask):
-    """eps_r sliced to the SELECTED frequencies.
+def blocky_layers_from_trace(rho_cells, z0, dz, rtol=1e-5, atol=0.0):
+    """Merge adjacent equal-rho runs into `(interface_depths_abs, res)`.
 
-    `eps_r` may be a scalar or one value per frequency of `tx_entry["freqs"]`.
-    A frequency subset (one stage of the multi-scale ladder) must slice it with
-    the same mask, or the analytic forward is evaluated at another frequency's
-    permittivity.
+    `depth` holds the interior interfaces only (empymod's convention), absolute
+    and positive down; `res` is one resistivity per layer.
+
+    An interface sits at the MIDPOINT between the last sample of one run and the
+    first of the next: `z0 + (k + 1/2)*dz`. `.rss` samples are NODES at
+    `o + k*d`, not cell tops - so treating the interface as the "cell bottom"
+    `z0 + (k+1)*dz` puts every one of them HALF A CELL TOO DEEP. That is what
+    the version of this in notebook 05 did, and it was wrong by exactly dz/2 in
+    every dataset of this survey (measured 0.4 / 0.475 / 0.7 m at 6/4/2 kHz
+    against `scripts/experiments/interface_snapping.py`, which reads the step
+    midpoint out of `sg.rss` independently). Half a cell moves |Hz| by 4.9-6.6 %
+    here, against a 3 % uncertainty floor - so this was a real bias in every
+    true-model overlay, not a cosmetic offset.
     """
-    arr = np.asarray(eps_r, dtype=float).reshape(-1)
+    rho = np.asarray(rho_cells, dtype=float).ravel()
+    nz = rho.size
+    if nz == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    boundary = float(z0) + (np.arange(nz, dtype=float) + 0.5) * float(dz)
+    is_new = np.ones(nz, dtype=bool)
+    is_new[1:] = ~np.isclose(rho[1:], rho[:-1], rtol=rtol, atol=atol)
+    run_starts = np.flatnonzero(is_new)
+
+    res = np.empty(run_starts.size, dtype=float)
+    depth = np.empty(max(0, run_starts.size - 1), dtype=float)
+    for j, s in enumerate(run_starts):
+        e = nz - 1 if j == run_starts.size - 1 else int(run_starts[j + 1]) - 1
+        res[j] = rho[int(s)]
+        if j < run_starts.size - 1:
+            depth[j] = boundary[int(e)]
+    return depth, res
+
+
+def true_model_layers_from_sg(sg_path, tx_x, tx_z, z_positive_up=False):
+    """`(depth_rel, res)` for the TRUE model beneath a transmitter, from sg.rss.
+
+    THE one implementation, so that an experiment and the notebook cannot drift
+    apart the way three copies of the 1D misfit once did. Notebook 05 imports
+    this rather than keeping its own reader. `depth_rel` is tx-relative, so it
+    drops straight into the inversion's parameterisation.
+
+    The column NEAREST `tx_x` is read, never the lateral average: averaging
+    across the fault throw mixes two different interface depths into one.
+    """
+    # `read_sg_grid` is the one .rss conductivity reader - it already handles
+    # the 2D/3D layout and the `o + k*d` sample convention.
+    from scripts.modules.multiscale_2d import read_sg_grid
+
+    g = read_sg_grid(sg_path)
+    xg, zg = np.asarray(g["x"], float), np.asarray(g["z"], float)
+    rho_grid = 1.0 / np.clip(np.asarray(g["sigma"], float), 1e-12, 1e12)
+    ix = int(np.argmin(np.abs(xg - float(tx_x)))) if xg.size else 0
+    rho_trace = np.asarray(rho_grid[ix, :], dtype=float)
+
+    z0 = float(g["oz"])
+    dz = float(g["dz"])
+    if z_positive_up:
+        z0, dz = -z0, -dz
+    if dz <= 0.0:
+        raise ValueError("True-model vertical dz must be > 0 after mapping.")
+
+    depth_abs, res = blocky_layers_from_trace(rho_trace, z0=z0, dz=dz)
+    return np.asarray(depth_abs, dtype=float) - float(tx_z), res
+
+
+def _slice_per_freq(value, freqs_full, freq_mask):
+    """A per-frequency quantity sliced to the SELECTED frequencies.
+
+    `value` may be None, a scalar, or one value per frequency of
+    `tx_entry["freqs"]`. A frequency subset (one stage of the multi-scale
+    ladder) must slice it with the same mask, or the analytic forward is
+    evaluated with another frequency's number.
+
+    Used for `eps_r`, `snap_dz` and `snap_origin_m` - every quantity Step 01
+    sizes PER DATASET. It was written for `eps_r` alone and named for it; the
+    rule is the same for all of them, so it is named for the rule now.
+    """
+    if value is None:
+        return None
+    arr = np.asarray(value, dtype=float).reshape(-1)
     if arr.size == 1 or freq_mask is None:
-        return eps_r if arr.size == 1 else arr
+        return float(arr[0]) if arr.size == 1 else arr
     m = np.asarray(freq_mask, dtype=bool)
     if arr.size != m.size:
         raise ValueError(
-            f"eps_r has {arr.size} entries but tx_entry has {m.size} frequencies"
+            f"a per-frequency value has {arr.size} entries but tx_entry "
+            f"has {m.size} frequencies"
         )
     return arr[m]
 
 
 def forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
-                            n_nodes=120, freq_mask=None, snap_dz=None):
+                            n_nodes=120, freq_mask=None, snap_dz=None,
+                            snap_origin_m=None):
     """Analytic (Hx, Hz) complex channel gain for a candidate model, via
     `analytic_1d_forward.forward_1d_gains` - the validated 2D magnetic
     line-source solver, exact counterpart of the FDTD survey (see that
@@ -120,9 +175,11 @@ def forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, 
     `freq_mask` restricts the forward to a subset of `tx_entry["freqs"]`. That
     is what makes one stage of the multi-scale ladder a SLICE rather than a
     rewrite: nothing else about the misfit changes between stages.
+
+    `snap_dz`/`snap_origin_m` are per-frequency like `eps_r`, and are sliced
+    with the same mask - a stage that fits 2 kHz must snap onto the 2 kHz grid.
     """
-    rho, thk, _ = unpack_model_params(params, n_layers, z_start_rel, z_end_rel,
-                                      snap_dz=snap_dz)
+    rho, thk, _ = unpack_model_params(params, n_layers, z_start_rel, z_end_rel)
     tx_z = float(tx_entry["tx_z"])
     off_x = np.asarray(tx_entry["off_x"], dtype=float)
     # PER-RECEIVER depths. This used to be `tx_z + off_z[0]`, which silently
@@ -138,13 +195,18 @@ def forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, 
     freqs = freqs_full
     if freq_mask is not None:
         freqs = freqs_full[np.asarray(freq_mask, dtype=bool)]
-    eps = _eps_for_freqs(eps_r, freqs_full, freq_mask)
-    return forward_1d_gains(rho, thk, freqs, off_x, tx_z, rx_depth_m, eps, n_nodes=n_nodes)
+    eps = _slice_per_freq(eps_r, freqs_full, freq_mask)
+    return forward_1d_gains(
+        rho, thk, freqs, off_x, tx_z, rx_depth_m, eps, n_nodes=n_nodes,
+        snap_dz=_slice_per_freq(snap_dz, freqs_full, freq_mask),
+        snap_origin_m=_slice_per_freq(snap_origin_m, freqs_full, freq_mask),
+    )
 
 
 def complex_gain_objective(
     params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
     reg_lambda, w_hxh, w_hxhz, sigma_hx, sigma_hz, C=None, freq_mask=None, snap_dz=None,
+    snap_origin_m=None,
 ):
     """Complex-gain misfit: ((C*pred - obs)/sigma) summed in quadrature over
     frequency and receiver, for both Hx and Hz, plus a Tikhonov first-
@@ -162,7 +224,7 @@ def complex_gain_objective(
     try:
         hx_pred, hz_pred = forward_analytic_for_tx(
             params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
-            freq_mask=freq_mask, snap_dz=snap_dz)
+            freq_mask=freq_mask, snap_dz=snap_dz, snap_origin_m=snap_origin_m)
     except ForwardRejected:
         return _REJECT_COST
 
@@ -214,25 +276,23 @@ def complex_gain_objective(
 # - because `forward_1d_gains` was hardcoded to the Kx solver. Fitting the full
 # tensor needs one forward call per SOURCE (not per component), so the cost is
 # 2x, not 4x.
-TENSOR_COMPONENTS = {
-    "Cxx": ("HX", "HX"),
-    "Cxz": ("HX", "HZ"),
-    "Czx": ("HZ", "HX"),
-    "Czz": ("HZ", "HZ"),
-}
+#
+# The map itself lives in `fd_visualization`, because the plot GUIs need it too
+# (to label the freq x source x receiver view selector) and this module already
+# imports that one - defining it in both places is how the two would drift.
+from scripts.modules.fd_visualization import TENSOR_COMPONENTS  # noqa: E402
 DEFAULT_COMPONENTS = ("Cxx", "Cxz")          # the historical Kx-only pair
 
 
 def forward_tensor_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
                           components=DEFAULT_COMPONENTS, n_nodes=120, freq_mask=None,
-                          snap_dz=None):
+                          snap_dz=None, snap_origin_m=None):
     """Analytic gains for the requested tensor components.
 
     Returns ``{component: complex [nfreq_sel, nrx]}``. One solver call per
     distinct SOURCE in `components`, so asking for all four costs two forwards.
     """
-    rho, thk, _ = unpack_model_params(params, n_layers, z_start_rel, z_end_rel,
-                                      snap_dz=snap_dz)
+    rho, thk, _ = unpack_model_params(params, n_layers, z_start_rel, z_end_rel)
     tx_z = float(tx_entry["tx_z"])
     off_x = np.asarray(tx_entry["off_x"], dtype=float)
     rx_depth_m = tx_z + np.asarray(tx_entry["off_z"], dtype=float)
@@ -240,7 +300,7 @@ def forward_tensor_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, ep
     freqs = freqs_full
     if freq_mask is not None:
         freqs = freqs_full[np.asarray(freq_mask, dtype=bool)]
-    eps = _eps_for_freqs(eps_r, freqs_full, freq_mask)
+    eps = _slice_per_freq(eps_r, freqs_full, freq_mask)
 
     unknown = [c for c in components if c not in TENSOR_COMPONENTS]
     if unknown:
@@ -249,8 +309,12 @@ def forward_tensor_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, ep
 
     out = {}
     for src in sorted({TENSOR_COMPONENTS[c][0] for c in components}):
-        hx, hz = forward_1d_gains(rho, thk, freqs, off_x, tx_z, rx_depth_m, eps,
-                                  n_nodes=n_nodes, source_field=src)
+        hx, hz = forward_1d_gains(
+            rho, thk, freqs, off_x, tx_z, rx_depth_m, eps, n_nodes=n_nodes,
+            source_field=src,
+            snap_dz=_slice_per_freq(snap_dz, freqs_full, freq_mask),
+            snap_origin_m=_slice_per_freq(snap_origin_m, freqs_full, freq_mask),
+        )
         for c in components:
             s_c, r_c = TENSOR_COMPONENTS[c]
             if s_c == src:
@@ -260,7 +324,7 @@ def forward_tensor_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, ep
 
 def tensor_objective_parts(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
                            reg_lambda, cal, components=DEFAULT_COMPONENTS, weights=None,
-                           freq_mask=None, snap_dz=None):
+                           freq_mask=None, snap_dz=None, snap_origin_m=None):
     """`(data_misfit, reg_norm, total)` for the requested tensor components.
 
     THE one implementation. `tensor_objective` returns only `total` from it, and
@@ -284,7 +348,7 @@ def tensor_objective_parts(params, tx_entry, n_layers, z_start_rel, z_end_rel, e
     try:
         pred = forward_tensor_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel,
                                      eps_r, components=components, freq_mask=freq_mask,
-                                     snap_dz=snap_dz)
+                                     snap_dz=snap_dz, snap_origin_m=snap_origin_m)
     except ForwardRejected:
         return _REJECT_COST, 0.0, _REJECT_COST
 
@@ -327,11 +391,12 @@ def tensor_objective_parts(params, tx_entry, n_layers, z_start_rel, z_end_rel, e
 
 def tensor_objective(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
                      reg_lambda, cal, components=DEFAULT_COMPONENTS, weights=None,
-                     freq_mask=None, snap_dz=None):
+                     freq_mask=None, snap_dz=None, snap_origin_m=None):
     """Scalar misfit for the optimisers - `tensor_objective_parts`'s total."""
     return tensor_objective_parts(
         params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r, reg_lambda, cal,
         components=components, weights=weights, freq_mask=freq_mask, snap_dz=snap_dz,
+        snap_origin_m=snap_origin_m,
     )[2]
 
 
@@ -358,7 +423,10 @@ def _calibration_blocks(path, src):
     if block is None:
         raise KeyError(
             f"No calibration for source {src} in {path}. Run the Step 02 "
-            f"calibration with 'cal source' set to {src}."
+            f"calibration batch - it calibrates EVERY dataset with the source "
+            f"it was modelled with, so a {src} block appears once Step 01 has "
+            f"built a {src} dataset. There is no per-source calibration control "
+            f"to set (RULE 2)."
         )
     return block
 
@@ -654,5 +722,7 @@ __all__ = [
     "tensor_objective",
     "complex_gain_objective",
     "forward_analytic_for_tx",
+    "blocky_layers_from_trace",
+    "true_model_layers_from_sg",
     "unpack_model_params",
 ]

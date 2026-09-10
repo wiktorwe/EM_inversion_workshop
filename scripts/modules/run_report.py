@@ -31,6 +31,23 @@ def json_safe(obj: Any) -> Any:
     return str(obj)
 
 
+def scalar_or_list(value) -> Any:
+    """One float when there is one value, a list when there are several.
+
+    `eps_r_used`, `f_min_hz` and `n_periods_extract` are PER FREQUENCY on an
+    acquisition matrix (measured eps_r 1198.3 / 599.2 / 399.4 at 2/4/6 kHz on
+    the workshop survey) and a single scalar on a legacy one-dataset workspace.
+    Wrapping them in `float()` was a TypeError in the GUI on every matrix
+    workspace; storing a one-element list on a single-dataset workspace would
+    have broken every reader of an older report instead. So: preserve the shape
+    the run actually had, aligned with `freqs_hz`.
+    """
+    arr = np.asarray(value, dtype=float).reshape(-1)
+    if arr.size == 1:
+        return float(arr[0])
+    return [float(v) for v in arr]
+
+
 def _abs_c_list(c_arr) -> list[float]:
     c = np.asarray(c_arr, dtype=complex).reshape(-1)
     return [float(v) for v in np.abs(c)]
@@ -70,8 +87,8 @@ def build_1d_run_summary(
     misfit_std: Sequence[float],
     chi2: Sequence[float],
     freqs_hz: Sequence[float],
-    n_periods_extract: float,
-    f_min_hz: float,
+    n_periods_extract: float | Sequence[float],
+    f_min_hz: float | Sequence[float],
     setup_meta_path: Path | str,
     calibration: Optional[Mapping[str, Any]] = None,
     forward_data_dim: Optional[int] = None,
@@ -90,12 +107,12 @@ def build_1d_run_summary(
         "seed_base": int(cfg.get("seed", seeds[0] if seeds else 0)),
         "seeds": [int(s) for s in seeds],
         "freqs_hz": [float(v) for v in freqs_hz],
-        "f_min_hz": float(f_min_hz),
-        "n_periods_extract": float(n_periods_extract),
+        "f_min_hz": scalar_or_list(f_min_hz),
+        "n_periods_extract": scalar_or_list(n_periods_extract),
         "forward_data_dim": int(forward_data_dim) if forward_data_dim is not None else None,
         "hx_path": hx_path,
         "hz_path": hz_path,
-        "eps_r_used": float(cfg.get("eps_r", 7.0)),
+        "eps_r_used": scalar_or_list(cfg.get("eps_r", 7.0)),
         "background_rho": float(cfg.get("background_rho", 10.0)),
         "n_layers": int(cfg.get("n_layers", 0)),
         "z_start": float(cfg.get("z_start", 0.0)),
@@ -272,6 +289,7 @@ def format_run_parameters_html(summary: Mapping[str, Any]) -> str:
 
 __all__ = [
     "build_1d_run_summary",
+    "scalar_or_list",
     "calibration_summary_block",
     "format_run_parameters_html",
     "json_safe",

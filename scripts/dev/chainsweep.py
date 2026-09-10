@@ -36,6 +36,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -80,28 +81,69 @@ def build_matrix_workspace(dst: Path, donor: Path, freqs=(2000, 4000), sources=(
     return fwd
 
 
+def _is_offending(val, fwd_root: Path) -> bool:
+    if not isinstance(val, Path):
+        return False
+    try:
+        if val.parent.resolve() != fwd_root.resolve():
+            return False
+    except OSError:
+        return False
+    return val.name in DATASET_ARTIFACTS
+
+
 def offending_globals(g: dict, fwd_root: Path):
-    """Path globals that point at a dataset artifact in the forward ROOT."""
+    """Paths that point at a dataset artifact in the forward ROOT.
+
+    Checks bare `Path` globals AND the attributes of objects held in globals.
+    The second half is not optional: the notebooks now bind ONE
+    `headless.DatasetPaths` (`DS`) instead of a dozen loose path constants, so
+    a bare-`Path`-only walk would report PASS on a notebook whose every dataset
+    artifact was bound to the root. A check that cannot see the thing it checks
+    is worse than no check, because it reads as evidence.
+    """
     bad = []
     for name, val in g.items():
-        if not isinstance(val, Path):
+        if name.startswith("__"):
             continue
-        try:
-            if val.parent.resolve() != fwd_root.resolve():
-                continue
-        except OSError:
-            continue
-        if val.name in DATASET_ARTIFACTS:
+        if _is_offending(val, fwd_root):
             bad.append(f"{name} = <forward root>/{val.name}")
+            continue
+        # One level of attributes, for dataclasses / SimpleNamespace holding paths.
+        fields = getattr(type(val), "__dataclass_fields__", None)
+        attrs = list(fields) if fields else (
+            list(vars(val)) if isinstance(val, SimpleNamespace) else [])
+        for attr in attrs:
+            sub = getattr(val, attr, None)
+            if _is_offending(sub, fwd_root):
+                bad.append(f"{name}.{attr} = <forward root>/{sub.name}")
     return sorted(bad)
+
+
+def _find_donor(fwd: Path):
+    """A directory holding a real `setup_metadata.json` to copy the fixture from.
+
+    Once the workshop's own workspace IS an acquisition matrix, the forward root
+    no longer carries one - it holds `manifest.json` and subdirectories. Without
+    this fallback the sweep would quietly SKIP from that point on, and a SKIP
+    reads like a pass.
+    """
+    if (fwd / "setup_metadata.json").exists():
+        return fwd
+    for sub in sorted(p for p in fwd.glob("*") if p.is_dir()):
+        if (sub / "setup_metadata.json").exists():
+            return sub
+    return None
 
 
 def run(nb_dir: Path = ROOT):
     from scripts.modules import workshop_config
-    donor = ROOT / "workspace" / "2D" / "forward"
-    if not (donor / "setup_metadata.json").exists():
-        print(f"SKIP: need a donor dataset at {donor} to build the fixture.")
+    donor = _find_donor(ROOT / "workspace" / "2D" / "forward")
+    if donor is None:
+        print(f"SKIP: need a donor dataset under "
+              f"{ROOT / 'workspace' / '2D' / 'forward'} to build the fixture.")
         return 0
+    print(f"donor dataset: {donor}")
 
     tmp = Path(tempfile.mkdtemp(prefix="chainsweep_"))
     try:

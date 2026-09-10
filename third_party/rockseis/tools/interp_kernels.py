@@ -4,7 +4,16 @@ from scipy import ndimage
 from ..utils.utils import triangle_smoothing_nd
 
 
+# `nearest` is spline order 0 in `ndimage.map_coordinates` - a blocky resample
+# that puts a material interface exactly ON a cell boundary instead of spreading
+# it over a one-cell ramp. The workshop needs it for `sg.rss`/`ep.rss`: the 1D
+# inversion fits CONTINUOUS interface depths against FDTD data, and with a
+# linear resample the FD interface is a ramp whose effective depth is its
+# midpoint, sitting BETWEEN cell faces - so no snapping of the candidate model
+# can ever line the two up. See KNOWN_ISSUES and
+# `scripts/experiments/interface_snapping.py`.
 METHOD_TO_ORDER = {
+    "nearest": 0,
     "linear": 1,
     "bspline": 3,
     "sinc": 5,

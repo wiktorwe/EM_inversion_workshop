@@ -50,7 +50,12 @@ for the user. That is how the `cal_freq_select` bug shipped.
   do not remove that guard, it once spammed the user's browser.
 - `chainsweep.py` builds a synthetic MATRIX workspace and executes every
   notebook against it, failing if any dataset artifact stays bound to the
-  forward root. The repo's own `workspace/` is usually a single-dataset one,
+  forward root. It walks the ATTRIBUTES of objects in the notebook namespace,
+  not just bare `Path` globals, because the notebooks now hold one
+  `headless.DatasetPaths` (`DS`) rather than a dozen loose constants - a
+  bare-Path-only walk would report PASS on a notebook whose every artifact was
+  root-bound. Its donor falls back to a dataset subdirectory, since a matrix
+  root has no `setup_metadata.json` of its own. The repo's own `workspace/` is usually a single-dataset one,
   where the wrong path still exists - so the other three checks all pass while
   the notebook is broken for anyone with a real acquisition matrix. That is
   exactly how the `SETUP_META` bug reached a user.
@@ -107,8 +112,21 @@ A plot control chooses what is DISPLAYED. It changes nothing on disk and runs
 nothing. **Leave these alone, and add them where a figure would otherwise be
 unreadable:**
 
-- `view dataset` dropdowns, frequency dropdowns, component (Hx/Hz) dropdowns
+- ONE `view` dropdown per plot panel, over the axes that actually exist on
+  disk: **frequency x source (Kx/Kz) x receiver (Hx/Hz)**, labelled
+  `2000 Hz . Kx -> Hx (Cxx)`. Built by `fd_visualization.view_combinations`
+  from `iter_datasets` x {Hx, Hz}, and shared by Steps 02, 04 and 06.
 - Tx index, local rx index, trace index, run number
+- Step 05's `QC freq` and `QC comp`: the 1D inversion is JOINT across the band,
+  so one model is fitted to every tone and picking a tone is meaningful there.
+  It is the only place a lone frequency dropdown belongs.
+
+The old layout - a `view dataset` dropdown AND a `frequency` dropdown AND a
+`component` dropdown - was three controls on axes that are not independent. A
+dataset IS a frequency and a source, so the `frequency` list was filled from a
+one-element `flist_hz` and could never reach another tone; the SOURCE axis was
+not selectable at all, so half the magnetic tensor was unreachable. Do not
+re-split them.
 
 Cramming every dataset and every frequency onto one axis to avoid a dropdown is
 NOT what this rule asks for. It makes the figures useless. That mistake was made
@@ -166,6 +184,7 @@ These keys DIFFER between datasets of a matrix, measured on the workshop survey:
 | `dt_model_target_s` | 7.68e-8 | 3.69e-8 | 2.54e-8 |
 | `f_min_hz` / `f_max_hz` / `flist_hz` | 2000 | 4000 | 6000 |
 | `nt_model`, `wavelet_*`, `pml_heuristic` | all differ | | |
+| the FD interface DEPTH `sg.rss` quantises to | 6020.1 | 6020.875 | 6020.8 |
 
 Reading ONE of those and applying it across the band is a silent systematic
 bias, not a rounding error. `eps_r_used` alone, taken from whichever dataset
@@ -175,13 +194,18 @@ improved the true-model chi-squared from 4.1457 to 3.9171 when fixed. It looks
 like a slightly poor fit, not a bug, which is exactly why it survived.
 
 `headless.matrix_setup(fwd_root)` is the ONE resolver: it returns `freqs`,
-`eps_r`, `f_min`, `n_periods_extract` all aligned per frequency, plus
-`by_source` / `meta_paths`. Steps 05 and 06 both use it. Do not hand-roll
-another.
+`eps_r`, `f_min`, `n_periods_extract`, `dx` and `snap_origin_m` all aligned per
+frequency, plus `by_source` / `meta_paths`. Steps 05 and 06 both use it. Do not
+hand-roll another.
 
-The analytic forward accepts `eps_r` as a scalar OR one value per frequency,
-and `inversion_1d` slices it with `freq_mask` so a multi-scale stage gets the
-right one.
+The analytic forward accepts `eps_r`, `snap_dz` and `snap_origin_m` as a scalar
+OR one value per frequency, and `inversion_1d._slice_per_freq` slices all three
+with `freq_mask` so a multi-scale stage gets the right one.
+
+**Reports must not collapse them either.** `run_report.scalar_or_list` stores
+`eps_r_used`, `f_min_hz` and `n_periods_extract` as a LIST aligned with
+`freqs_hz` when there is more than one, and a scalar when there is one - so an
+exported run says what it was actually fitted with.
 
 ## RULE 4 - CHANGE THE WHOLE CHAIN, OR DO NOT CHANGE IT
 
@@ -263,6 +287,11 @@ same edit that caused it:
 | Made Step 05 matrix-aware | it kept `SETUP_META = <forward root>/setup_metadata.json`, a file that cannot exist on a matrix workspace - the lambda tuner died on it in front of the user | grep the notebook you edited for its OWN path constants, and run `chainsweep.py`, which fails on exactly this |
 | Built one dataset per frequency, each with its own `eps_r_used` | Steps 05/06 kept reading ONE `eps_r` and applying it to the whole band - 0.91 sigma of bias at 6 kHz, visible only as a slightly worse fit | list which metadata keys VARY across datasets, then grep every reader of each one |
 | Then made that `eps_r` an **array** in `get_eps_r_used` | every leftover `float(eps_r)` (`layers_from_rho_thk`, `build_1d_run_summary`, notebook 05 QC, notebook 06 synthetics) - TypeError in the GUI | type/shape change: grep `float(` / `[0]` / format of the OLD scalar, not just the name |
+| Fixed those `float()` sites so Step 06's synthetics ran at all | the NEXT statement in the same handler, `int(real['Hx'].get('nt', 0))`, died on a matrix: `.get(k, default)` returns None when the key EXISTS and holds None, which an assembled result's `nt`/`dt` do | when you unblock a handler, RUN it to the end - the crash you fixed was hiding the next one |
+| Replaced the per-notebook path globals with one `DS` | `chainsweep.py` only walked bare `Path` globals, so it would have reported PASS on a notebook whose every artifact was root-bound | when you change the SHAPE of what a check inspects, change the check in the same edit - a check that cannot see its subject reads as evidence |
+| Made Step 05's features load on a matrix | `handlersweep.py` then actually reached `on_tune_de_budget`, a real 174 s DE run, and the sweep timed out | a sweep that calls every handler must BOUND the ones that optimise - `handlersweep` now patches the tuners to a single tiny budget rather than skipping them, because the lambda tuner is exactly the handler that shipped a bug |
+| Added per-frequency interface snapping | the empymod fallback branch still forwarded the UNSNAPPED thickness, silently modelling a different Earth than the main path | follow the new argument into every branch, including error paths - this is the second time that exact branch has been missed |
+| Rebuilt the view selectors | assigning `view_combo.value` fires NOTHING when the value is unchanged, so after a batch that walked every dataset the selector showed combination 0 while `DS` pointed at the last one | a widget handler is not a resync; call it explicitly after rebuilding options |
 
 ### Duplication is how chains rot
 
@@ -398,9 +427,9 @@ previous one; every arrow is a place a change can break something.
   (frequencies, `n_periods_extract`, SEG-Y template geometry)
 - **writes** `workspace/2D/results/Run{N}/` SEG-Y exports
 - **key chain fact** it has TWO code cells - setup and GUI. `_select_dataset`
-  is defined in the first and the dropdown in the second; both run in one
-  namespace under Voila. It carries a dataset dropdown built from
-  `headless.iter_datasets`, like Step 02.
+  is defined in the first and the `view` dropdown in the second; both run in one
+  namespace under Voila. The dropdown's (frequency, source) half rebinds `DS`,
+  so the model plots follow it too; its receiver half selects the gather drawn.
 
 ### Step 05 - 1D layered inversion
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
@@ -433,7 +462,12 @@ previous one; every arrow is a place a change can break something.
   `data_convention`) + the forward data
 - **writes** `workspace/1D/results/` SEG-Y exports
 - **key chain facts**
-  - it carries the same dataset dropdown as Steps 02 and 04.
+  - it carries the same `view` dropdown as Steps 02 and 04, and its SOURCE
+    half is load-bearing: `on_load_real` assembles the whole tensor with
+    `load_tensor_features` and the selector picks which source's half is drawn,
+    with `get_calibration_C` and the synthetics following the same source.
+    Before that it was hardcoded to Kx and `gains['HZ']` was computed and
+    discarded, so Czx/Czz could not be displayed at all.
   - it WARNS when a run's `data_convention` is older than
     `run_report.DATA_CONVENTION`. Bump that constant whenever a change makes
     new channel gains incomparable with old ones, and say why in its comment.
@@ -458,15 +492,27 @@ runmod.sh  mpiqueue.log  Data/Hxshot.rss  Data/Hzshot.rss
 ```
 
 **So no notebook global may be bound as `CONFIG.fwd_2d_dir / <one of those>`.**
-It must be bound through a dataset. Two mechanisms exist:
+It must be bound through a dataset, and there is ONE mechanism for that:
 
-- Steps 02, 03, 04, 06 - `_select_dataset(name)` rebinds the path globals onto
-  the chosen dataset. Each rebinds its OWN hand-maintained list, declared in its
-  `global` statement; adding a path constant means adding it there too.
-- Step 05 - consumes the WHOLE matrix, so it has no "selected" dataset. It binds
-  `SETUP_META` and `SG_TRUE_PATH` to the representative dataset at startup via
-  `active_setup_meta()`, and reads every dataset through
-  `matrix_dataset_dirs()` / `matrix_metadata_paths()`.
+    headless.dataset_paths(run_dir) -> DatasetPaths
+
+a frozen dataclass carrying `dir setup_meta sg ep wav2d survey mod_cfg runmod
+clean_sh mpiqueue_log data_dir hx hz processed_dir amp_phase_npz`. Every
+notebook holds a single global `DS` and reads `DS.hx`, `DS.setup_meta`, ...
+`headless.select_dataset(root, name)` returns `(entry, DatasetPaths)` and is
+what each notebook's `_select_dataset` calls.
+
+Steps 02, 03, 04 and 06 rebind `DS` from the `view` selector. Step 05 consumes
+the WHOLE matrix, so it has no selected dataset: it binds `DS` once to the
+representative dataset via `active_setup_meta()`, and reads every dataset
+through `matrix_dataset_dirs()` / `matrix_metadata_paths()`.
+
+This used to be TWO mechanisms and eleven loose path constants per notebook,
+rebound through a hand-maintained `global` list. Forgetting to extend that list
+is how a root-bound path shipped three times: `SETUP_META` (found by a user),
+`SG_TRUE_PATH` (found by `chainsweep.py`) and `FDMODEL_DATA_DIR` in Step 05,
+which was never rebound at all and survived only because the matrix branch of
+`extract_features` returned before reaching it.
 
 This contract is the link that was missing from this map, and its absence is
 why a broken one shipped: the map recorded what each step READS, but never how
@@ -569,6 +615,28 @@ all of `scripts/experiments/`}
   one source or one dataset to *act* on, delete it - a selector that only
   changes what is *displayed* is fine. This is the most frequently re-broken
   rule in the repo; it has now been re-litigated three times.
+- **`sg.rss`/`ep.rss` are resampled NEAREST, not linear.** A linear resample
+  makes every interface a one-cell RAMP whose medium is neither layer; nearest
+  makes it a step on the grid. Measured with
+  `scripts/experiments/interface_snapping.py`: transition cells per interface
+  1 -> 0, and the placement error moved inside the half-cell bound in every
+  dataset. `headless.build_forward_inputs` and notebook 01's `on_apply_outputs`
+  both do this and MUST stay in step, or the GUI and the headless driver write
+  different Earth models. Workspaces built before the change are not comparable
+  with ones built after.
+- **`.rss` samples are NODES, so a material boundary is at `o + (k+1/2)*d`.**
+  Reading it as the "cell bottom" `o + (k+1)*d` puts every interface HALF A CELL
+  too deep - measured 0.4 / 0.475 / 0.7 m at 6/4/2 kHz, against a half-cell data
+  change of 4.9-6.6 % on |Hz| and a 3 % floor. `inversion_1d.blocky_layers_from_
+  trace` is the one reader; `interface_snapping.py` measures the same depths
+  independently and is the cross-check.
+- **Candidate interfaces are snapped onto EACH FREQUENCY's own grid.**
+  `analytic_1d_forward.snap_interfaces_to_grid`, through `forward_1d_gains`,
+  keyed on `(eps_r, snap_dz, snap_origin_m)`. One grid for a joint fit is right
+  for one tone and wrong for the rest. Measured on the true model over 5 Tx and
+  all four tensor components: reduced chi-squared 0.0660 unsnapped, **0.0296**
+  snapped. The deepest interior interface is the pinned depth-window edge and is
+  not fitted, so it is not snapped (`pin_last`).
 - **Every per-frequency dataset has its own grid, its own C and its own
   `n_periods_extract`.** Never read a whole band out of one per-frequency
   dataset - it only contains the tone it was designed for, and the others are

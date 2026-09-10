@@ -18,6 +18,37 @@ pio.renderers.default = "json"
 import plotly.graph_objects as _go
 _go.Figure.show = lambda self, *a, **k: None
 
+# The two Step 05 tuners are REAL optimiser runs, not UI updates: measured
+# 174 s for `on_tune_de_budget` alone on this workspace, and the lambda L-curve
+# is longer. That is minutes of differential evolution inside a lint sweep, and
+# it is why this sweep started timing out.
+#
+# They are NOT put in SKIP. `on_tune_lambda_lcurve` is exactly the handler that
+# died on `SETUP_META` in front of a user, so it is the last one to stop
+# checking. Instead the optimiser underneath them is bound to a single tiny
+# budget: the whole handler still executes end to end - every attribute read,
+# every plot, every status update - it just does not spend three minutes
+# converging to a recommendation nothing reads. This must be patched BEFORE the
+# notebooks are exec'd, because they import these by name.
+import scripts.modules.inversion_tuning as _tuning
+
+_real_tune_de = _tuning.tune_de_budget
+_real_tune_lambda = _tuning.tune_lambda_lcurve
+
+
+def _cheap_tune_de(cfg, tx_entry, **kw):
+    kw.update(budgets=((4, 1),), n_seeds=2, n_jobs=1)
+    return _real_tune_de(cfg, tx_entry, **kw)
+
+
+def _cheap_tune_lambda(cfg, tx_entry, **kw):
+    kw.update(lambdas=(0.0, 500.0), n_jobs=1)
+    return _real_tune_lambda(cfg, tx_entry, **kw)
+
+
+_tuning.tune_de_budget = _cheap_tune_de
+_tuning.tune_lambda_lcurve = _cheap_tune_lambda
+
 NBS = ["01_fw_setup.ipynb", "02_fwmodelling_and_data_visualization.ipynb",
        "03_2d_inversion.ipynb", "04_2d_inversion_results.ipynb",
        "05_1d_inversion.ipynb", "06_1d_inversion_results.ipynb"]

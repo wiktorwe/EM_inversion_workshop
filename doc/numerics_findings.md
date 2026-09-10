@@ -289,24 +289,61 @@ data whose interfaces are quantised onto the FD grid. `C` is one complex number
 per frequency shared by every transmitter; this error is model- and
 depth-dependent, so `C` cannot absorb it.
 
-Sensitivity, measured by moving one interface of a representative 2/25/100 Ohm-m
-model:
+Sensitivity, measured by moving one interface of a representative 2/25/100
+Ohm-m model by half a cell of that dataset's own grid:
 
-| shift | max change in \|Hx\| | max change in \|Hz\| |
-|---|---|---|
-| 0.4 m (half a cell) | 2.34 % | **4.95 %** |
-| 0.8 m (one cell) | 4.57 % | 9.70 % |
+| dataset | half a cell | max change in \|Hx\| | max change in \|Hz\| |
+|---|---|---|---|
+| 2 kHz (dx 1.40 m) | 0.70 m | 0.53 % | **6.58 %** |
+| 4 kHz (dx 0.95 m) | 0.475 m | 1.61 % | **5.27 %** |
+| 6 kHz (dx 0.80 m) | 0.40 m | 2.34 % | **4.95 %** |
 
-against a 3 % uncertainty floor and 0.06-4.9 % calibration scatter. The actual
-placement error between the SEG-Y model and the FD grid is 0.34 m rms /
-0.50 m max - i.e. right at the noise floor.
+against a 3 % uncertainty floor. So this is above the floor on `|Hz|` at every
+tone, and worth fixing rather than only quantifying.
 
-`inversion_1d.unpack_model_params` now takes a `snap_dz` argument. It is **off by
-default**, because snapping candidate interfaces to cell *faces* only partly
-fixes this: `sg.rss` is resampled with linear interpolation, so an FD interface
-is a one-cell ramp whose midpoint sits *between* faces. Making snapping exact
-would also require resampling the model blockily. Quantifying the bias is the
-honest option until that is done.
+**Three things were wrong; all three are now fixed and measured.**
+
+1. **The model was resampled with LINEAR interpolation**, so an interface was a
+   one-cell RAMP - the FD medium at an interface was neither layer, which is not
+   what a layered analytic forward models. `sg.rss`/`ep.rss` are now resampled
+   with `nearest` (`headless.build_forward_inputs`, and notebook 01's
+   `on_apply_outputs` - the two must stay in step). Measured with
+   `scripts/experiments/interface_snapping.py`: transition cells per interface
+   1 -> 0, and the placement error moved inside the half-cell bound in every
+   dataset (max 0.400 / 0.375 / 0.300 m at 2/4/6 kHz) where the linear model
+   exceeded it (0.500 m against a 0.400 m bound).
+
+2. **The true-model reader placed every interface half a cell too deep.** It
+   treated `.rss` samples as cell tops (`z0 + (k+1)*dz`); they are NODES, so a
+   material boundary sits at `z0 + (k+1/2)*dz`. The error was exactly `dz/2` in
+   every dataset - 0.4 / 0.475 / 0.7 m at 6/4/2 kHz. Given the table above, that
+   was a real bias in every true-model overlay, not a cosmetic offset.
+   `inversion_1d.blocky_layers_from_trace` is now the one reader, cross-checked
+   against `interface_snapping.py`, which reads the same depths out of `sg.rss`
+   independently.
+
+3. **Snapping was off, and would have been to the wrong grid.** Candidate
+   interfaces are now snapped onto **each frequency's own** grid
+   (`analytic_1d_forward.snap_interfaces_to_grid`, through `forward_1d_gains`,
+   enabled by default in notebook 05). Per frequency is not a refinement: each
+   dataset resamples the same `sg.rss` on its own `dx`, so the same true
+   interface at 6020.5 m lands at 6020.1 / 6020.875 / 6020.8 m in the 2/4/6 kHz
+   models. One grid would be right for one tone and wrong for the other two.
+
+Measured on the TRUE model over 5 Tx and all four tensor components
+(`scripts/experiments/true_model_check.py`), against a matrix calibrated with
+`lateral_average_true`:
+
+| | reduced chi2 |
+|---|---|
+| no snapping | 0.0660 |
+| snapped per frequency | **0.0296** |
+
+The deepest interior interface in the inversion's parameterisation is the pinned
+depth-window edge - identical for every candidate, not fitted - so it is not
+snapped (`pin_last`). That, and the layered solver's requirement that the finite
+stack be centred on the transmitter, are what still limit how finely a 1D model
+can be described here. Neither binds this survey at chi2 0.03.
 
 ---
 

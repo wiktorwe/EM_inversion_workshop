@@ -252,6 +252,83 @@ def compute_gains_for_fd_outputs(hx_path, hz_path, wavelet_path, freqs, f_min_hz
     }
 
 
+# ---------------------------------------------------------------------------
+# The 2x2 magnetic tensor, and the view axes that actually exist on disk
+# ---------------------------------------------------------------------------
+#
+# Each component is one (SOURCE, RECEIVER) pair. Every FDTD run records both
+# receiver components, so the two SOURCE runs (Kx and Kz) between them give all
+# four:
+#
+#     Cxx = Hx from Kx      Cxz = Hz from Kx
+#     Czx = Hx from Kz      Czz = Hz from Kz
+#
+# This lives here, not in `inversion_1d`, because both the inversion AND the
+# plot GUIs need it and `inversion_1d` already imports this module
+# (`load_tensor_features` calls `compute_gains_for_fd_outputs`) - the reverse
+# would be an import cycle. `inversion_1d.TENSOR_COMPONENTS` is this dict.
+TENSOR_COMPONENTS = {
+    "Cxx": ("HX", "HX"),
+    "Cxz": ("HX", "HZ"),
+    "Czx": ("HZ", "HX"),
+    "Czz": ("HZ", "HZ"),
+}
+
+# (source, receiver) -> component name. The inverse of the above, for labelling.
+COMPONENT_BY_SOURCE_RECEIVER = {v: k for k, v in TENSOR_COMPONENTS.items()}
+
+# Human labels. The SOURCE is a K (a magnetic line source, `source_type` 3 or 5)
+# and the RECEIVER is an H - keeping them typographically distinct is the whole
+# point, because "Hx" alone is ambiguous between the two.
+SOURCE_LABELS = {"HX": "Kx", "HZ": "Kz"}
+RECEIVER_LABELS = {"HX": "Hx", "HZ": "Hz"}
+RECEIVERS = ("Hx", "Hz")
+
+
+def view_combination_label(freq_hz, source_field, receiver) -> str:
+    """`2000 Hz - Kx -> Hx (Cxx)`, the label of one view combination."""
+    src = str(source_field).upper()
+    rx = str(receiver).upper()
+    comp = COMPONENT_BY_SOURCE_RECEIVER.get((src, rx))
+    f_txt = "broadband" if freq_hz is None else f"{float(freq_hz):g} Hz"
+    return (f"{f_txt} \u00b7 {SOURCE_LABELS.get(src, src)} \u2192 "
+            f"{RECEIVER_LABELS.get(rx, rx)}" + (f" ({comp})" if comp else ""))
+
+
+def view_combinations(datasets):
+    """Every (frequency, source, receiver) a matrix workspace actually holds.
+
+    Returns `[(label, key), ...]` for an ipywidgets Dropdown, where each `key`
+    is a dict with `dataset`, `run_dir`, `freq_hz`, `source_field`, `receiver`.
+
+    THIS IS THE VIEW AXIS. Step 01 writes one dataset per (frequency, source)
+    pair, so a dataset IS a frequency and a source; both receiver components are
+    recorded by every run. The plot GUIs used to offer a `dataset` dropdown AND
+    a `frequency` dropdown AND a `component` dropdown, filling the frequency one
+    from the selected dataset's `flist_hz` - which on a matrix is a SINGLE tone,
+    so that control could only ever show one option and could never reach
+    another tone (it lives in a different directory, modelled with a different
+    source). The source axis was not reachable at all. One list over the real
+    product replaces all three.
+
+    Ordered by frequency, then source, then receiver, so stepping through it
+    walks the tensor tone by tone.
+    """
+    out = []
+    for d in sorted(datasets, key=lambda d: (
+            float(d.get("freq_hz") if d.get("freq_hz") is not None else -1.0),
+            str(d.get("source_field", "HX")).upper())):
+        src = str(d.get("source_field", "HX")).upper()
+        for rx in ("HX", "HZ"):
+            out.append((
+                view_combination_label(d.get("freq_hz"), src, rx),
+                {"dataset": d["name"], "run_dir": str(d["run_dir"]),
+                 "freq_hz": d.get("freq_hz"), "source_field": src,
+                 "receiver": RECEIVER_LABELS[rx]},
+            ))
+    return out
+
+
 _PHASE_COMPARE_METRICS = frozenset(
     ("phase_vs_rx_deg", "phase_vs_tx_deg", "phase_vs_freq_deg")
 )
@@ -316,7 +393,14 @@ def save_amp_phase_npz(output_path, result):
 
 
 __all__ = [
+    "COMPONENT_BY_SOURCE_RECEIVER",
+    "RECEIVERS",
+    "RECEIVER_LABELS",
+    "SOURCE_LABELS",
+    "TENSOR_COMPONENTS",
     "apply_compare_plot_yaxes",
+    "view_combination_label",
+    "view_combinations",
     "build_trace_index",
     "steady_state_gains",
     "compute_gains_for_fd_outputs",

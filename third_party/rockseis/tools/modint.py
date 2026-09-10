@@ -240,7 +240,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Interpolate regularly sampled Rockseis models/data.")
     parser.add_argument("input", nargs="?", default="-", help="Input RSS file path, or '-' for stdin.")
     parser.add_argument("output", nargs="?", default="-", help="Output RSS file path, or '-' for stdout.")
-    parser.add_argument("--method", default="linear", choices=["linear", "bspline", "sinc"])
+    parser.add_argument("--method", default="linear",
+                        choices=["nearest", "linear", "bspline", "sinc"])
     parser.add_argument("--antialias", type=_parse_bool, default=True)
     parser.add_argument("--verbose", type=_parse_bool, default=False)
 

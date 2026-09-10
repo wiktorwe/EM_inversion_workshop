@@ -1040,7 +1040,10 @@ def calibration_for_inversion_multi(setup_meta_paths, source_field=DEFAULT_SOURC
         if block is None:
             raise KeyError(
                 f"No {source_field} calibration in {path}. Run the Step 02 "
-                f"calibration for that dataset with 'cal source' set to {source_field}."
+                f"calibration batch - it calibrates EVERY dataset with the source "
+                f"it was modelled with, so a {source_field} block appears once "
+                f"Step 01 has built a {source_field} dataset. There is no "
+                f"per-source calibration control to set (RULE 2)."
             )
         c = (np.asarray(block["C_hxhz_shared_real"], dtype=float)
              + 1j * np.asarray(block["C_hxhz_shared_imag"], dtype=float))

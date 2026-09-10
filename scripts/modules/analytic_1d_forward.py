@@ -154,6 +154,12 @@ def layers_from_rho_thk(rho: np.ndarray, thickness: np.ndarray, eps_r: float) ->
     layers only - the last layer is always the halfspace). `eps_r` is
     shared by every layer (see `forward_1d_gains` for why it should be the
     FD run's own `eps_r_used`, not a separately-guessed physical value).
+
+    `eps_r` is ONE SCALAR here, deliberately: a layer stack belongs to a single
+    frequency. On an acquisition matrix `eps_r` is per frequency, and the caller
+    builds one stack per frequency - `forward_1d_gains` does this through its
+    `layers_at` cache. Passing the whole per-frequency array here is a
+    `TypeError`, which is exactly how Step 05's convergence check used to die.
     """
     rho = np.asarray(rho, dtype=float).reshape(-1)
     thickness = np.asarray(thickness, dtype=float).reshape(-1)
@@ -165,6 +171,78 @@ def layers_from_rho_thk(rho: np.ndarray, thickness: np.ndarray, eps_r: float) ->
     layers = [Layer1D(float(rho[i]), float(thickness[i]), float(eps_r)) for i in range(n_layers - 1)]
     layers.append(Layer1D(float(rho[-1]), None, float(eps_r)))
     return layers
+
+
+def snap_interfaces_to_grid(thickness, tx_depth_m, snap_dz, snap_origin_m,
+                            pin_last=True):
+    """Thicknesses whose interior interfaces land on an FD model's own grid.
+
+    WHY. The inversion fits CONTINUOUS interface depths against FDTD data whose
+    interfaces are quantised onto the FD grid. `C(f)` cannot absorb that: C is
+    one complex number per frequency shared by every transmitter, while this
+    error is model- and depth-dependent. Measured on this survey, half a cell
+    moves |Hz| by 4.9-6.6 % against a 3 % uncertainty floor.
+
+    WHERE THE GRID IS. `sg.rss` is resampled with NEAREST (see
+    `headless.build_forward_inputs`), so an interface is a step between two
+    samples and its effective depth is their midpoint: `oz + (k + 1/2)*dz`.
+    `snap_origin_m` is one point of that lattice (`oz + dz/2`); measured
+    directly by `scripts/experiments/interface_snapping.py`, which reports the
+    distance off it as 0.0000 m for every dataset.
+
+    THE FRAME. `rockem.model.layers_to_stack` centres the finite stack on the
+    transmitter: `z0 = tx_depth_m - span/2`, interior interfaces at
+    `z0 + cumsum(thickness)`. `unpack_model_params` rescales thicknesses to fill
+    the configured depth window exactly, so `span` is a CONSTANT of the run, not
+    a property of the candidate - which is what makes this well defined rather
+    than circular.
+
+    `pin_last` says whether the caller's deepest interior interface is FITTED.
+    In `unpack_model_params`'s parameterisation it is not: thicknesses are
+    rescaled to fill the depth window exactly, so the deepest interior interface
+    sits at `z0 + span`, is identical for every candidate, and represents the
+    window edge rather than a feature of the Earth. Snapping it would change
+    `span`, hence `z0`, hence every other interface, for no gain - so the
+    default pins it and snaps only what moves. A caller describing a REAL layer
+    stack (the true model, say) has a genuine interface there and passes
+    `pin_last=False`; the stack is then re-centred on the snapped geometry.
+
+    Interfaces are kept strictly increasing and strictly inside the stack, so a
+    snap that would collapse two of them onto one grid point is nudged one cell
+    apart rather than producing a zero-thickness layer the solver would reject.
+    """
+    thk = np.asarray(thickness, dtype=float).reshape(-1)
+    if thk.size < 2 or snap_dz is None or float(snap_dz) <= 0.0:
+        return thk
+    d = float(snap_dz)
+    org = float(snap_origin_m)
+    span = float(np.sum(thk))
+    z0 = float(tx_depth_m) - 0.5 * span
+    depth = z0 + np.cumsum(thk)              # absolute interior interfaces
+
+    if not pin_last:
+        # Every interface is real. Snap them all, then rebuild the stack the way
+        # `layers_to_stack` will re-centre it: a stack starting at relative
+        # depth `-d[-1]` puts each interface back at its snapped absolute depth.
+        rel = np.sort(org + np.round((depth - org) / d) * d) - float(tx_depth_m)
+        for i in range(1, rel.size):
+            rel[i] = max(rel[i], rel[i - 1] + d)
+        out = np.diff(np.concatenate([[-float(rel[-1])], rel]))
+        return thk if np.any(out <= 0.0) else out
+
+    last = float(depth[-1])                  # pinned by the window - never snapped
+    moving = depth[:-1]
+    snapped = org + np.round((moving - org) / d) * d
+    for i in range(snapped.size):
+        lo_i = z0 + (i + 1) * 1e-9 if i == 0 else snapped[i - 1] + d
+        hi_i = last - (snapped.size - i) * d
+        if hi_i < lo_i:                      # window too thin for this many layers
+            return thk
+        snapped[i] = min(max(snapped[i], lo_i), hi_i)
+    out = np.diff(np.concatenate([[z0], snapped, [last]]))
+    if np.any(out <= 0.0):
+        return thk
+    return out
 
 
 def _is_contrasted_interface_rejection(exc: GreensSolverError) -> bool:
@@ -182,6 +260,9 @@ def forward_1d_gains(
     n_nodes: int = 120,
     lam_max: Optional[float] = None,
     source_field: str = "HX",
+    snap_dz=None,
+    snap_origin_m=None,
+    snap_pin_last: bool = True,
     allow_empymod_fallback: bool = False,
     stats: Optional[Dict[str, bool]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -203,6 +284,16 @@ def forward_1d_gains(
     all at one depth - harmless for this workshop's default colinear,
     zero-depth-offset survey, wrong the moment anyone uses depth-offset
     receivers.
+
+    `snap_dz` / `snap_origin_m` snap the candidate's interior interfaces onto
+    the FD model's own grid - see `snap_interfaces_to_grid`. Both may be a
+    SCALAR or ONE VALUE PER FREQUENCY, exactly like `eps_r`, and per frequency
+    is the normal case on an acquisition matrix: each dataset resamples the same
+    `sg.rss` on its own `dx` (1.40 / 0.95 / 0.80 m at 2/4/6 kHz here), so the
+    FD interface depth genuinely DIFFERS between tones (measured 6020.1 /
+    6020.875 / 6020.8 m for the same true interface at 6020.5 m). One snap grid
+    for a joint fit would therefore be right for one tone and wrong for the
+    others. Leave them `None` to fit continuous depths, as before.
 
     `lam_max` overrides the solver's kx-truncation limit (default `None` =
     `_default_lam_max`, sized off the model's MOST conductive layer). It is
@@ -287,18 +378,61 @@ def forward_1d_gains(
             f"eps_r size {eps_arr.size} matches neither 1 nor the frequency "
             f"count {freqs_hz.size}"
         )
-    _layer_cache: Dict[float, List[Layer1D]] = {}
+    # `snap_dz` / `snap_origin_m` broadcast like `eps_r`: scalar or per frequency.
+    def _per_freq(value, name):
+        if value is None:
+            return np.full(freqs_hz.shape, np.nan, dtype=float)
+        arr = np.asarray(value, dtype=float).reshape(-1)
+        if arr.size == 1:
+            return np.full(freqs_hz.shape, float(arr[0]), dtype=float)
+        if arr.shape != freqs_hz.shape:
+            raise ValueError(
+                f"{name} size {arr.size} matches neither 1 nor the frequency "
+                f"count {freqs_hz.size}"
+            )
+        return arr
 
-    def layers_at(eps_value: float):
-        key = float(eps_value)
+    snap_arr = _per_freq(snap_dz, "snap_dz")
+    org_arr = _per_freq(snap_origin_m, "snap_origin_m")
+    if snap_dz is not None and snap_origin_m is None:
+        raise ValueError("snap_dz needs snap_origin_m: the grid of achievable "
+                         "interface depths is oz + (k+1/2)*dz, and without its "
+                         "origin the snap would be to an arbitrary lattice.")
+
+    # Keyed on (eps_r, snap_dz, snap_origin_m): the layer STACK, not just the
+    # permittivity, now varies per frequency when snapping is on.
+    _layer_cache: Dict[tuple, List[Layer1D]] = {}
+
+    def thk_at(ifreq: int):
+        """The layer thicknesses THIS frequency is modelled with.
+
+        Snapping makes the stack itself frequency-dependent, so every consumer
+        must ask for the right one - including the empymod fallback, which would
+        otherwise model the unsnapped stack while the main path modelled the
+        snapped one. That is the same shape of bug as the `source_field` the
+        fallback used to ignore.
+        """
+        dz_value, org_value = snap_arr[ifreq], org_arr[ifreq]
+        if np.isfinite(dz_value) and np.isfinite(org_value):
+            return snap_interfaces_to_grid(thickness, tx_depth_m, dz_value,
+                                           org_value, pin_last=snap_pin_last)
+        return thickness
+
+    def layers_at(ifreq: int):
+        eps_value = float(eps_arr[ifreq])
+        dz_value = snap_arr[ifreq]
+        org_value = org_arr[ifreq]
+        key = (eps_value,
+               None if not np.isfinite(dz_value) else float(dz_value),
+               None if not np.isfinite(org_value) else float(org_value))
         if key not in _layer_cache:
             try:
-                _layer_cache[key] = layers_from_rho_thk(rho, thickness, key)
+                _layer_cache[key] = layers_from_rho_thk(rho, thk_at(ifreq), eps_value)
             except ValueError as exc:
                 raise ForwardRejected(str(exc)) from exc
         return _layer_cache[key]
 
-    layers = layers_at(eps_arr[0])
+    layers = layers_at(0)
 
     rx_depths = np.asarray(rx_depth_m, dtype=float).reshape(-1)
     if rx_depths.size == 1:
@@ -313,7 +447,7 @@ def forward_1d_gains(
     hz = np.full((nfreq, nrx), np.nan, dtype=complex)
     used_empymod_fallback = False
     for ifreq, f in enumerate(freqs_hz):
-        layers = layers_at(eps_arr[ifreq])
+        layers = layers_at(ifreq)
         n_eff, lam_eff = resolve_quadrature(layers, float(f), n_nodes, lam_max)
         for depth in np.unique(rx_depths):
             mask = rx_depths == depth
@@ -346,8 +480,8 @@ def forward_1d_gains(
                         # returned the Kx response for a rejected Kz solve -
                         # silently, since the fallback only warns generically.
                         hx_fb, hz_fb = forward_empymod_line_gains(
-                            rho, thickness, np.asarray([f]), off_x[mask], tx_depth_m,
-                            float(depth), float(eps_arr[ifreq]),
+                            rho, thk_at(ifreq), np.asarray([f]), off_x[mask],
+                            tx_depth_m, float(depth), float(eps_arr[ifreq]),
                             source_field=source_field,
                         )
                     except Exception as fb_exc:
@@ -382,7 +516,7 @@ def check_kx_convergence(
     off_x: Sequence[float],
     tx_depth_m: float,
     rx_depth_m: float,
-    eps_r: float,
+    eps_r: float | Sequence[float],
     n_draws: int = 25,
     n_nodes_default: int = 120,
     rel_tol: float = 3e-3,
@@ -434,6 +568,22 @@ def check_kx_convergence(
     from scripts.modules.rockem_bridge import magnetic_line_source_fields_layered as _solver
     from rockem.greens.greens_layered_2d import _default_lam_max
 
+    # `eps_r` may be a scalar or one value PER FREQUENCY, exactly as
+    # `forward_1d_gains` accepts it. Only the `lam0` leg below ever needed a
+    # scalar, and it took one by calling `layers_from_rho_thk(rho, thk, eps_r)`
+    # once - a TypeError on a matrix workspace. `lam_max` is sized off the
+    # model's most conductive layer AT a frequency, so the honest fix is one
+    # stack per frequency with that frequency's own permittivity.
+    freq_arr = np.asarray(freqs_hz, dtype=float).reshape(-1)
+    eps_arr = np.asarray(eps_r, dtype=float).reshape(-1)
+    if eps_arr.size == 1:
+        eps_arr = np.full(freq_arr.shape, float(eps_arr[0]), dtype=float)
+    if eps_arr.shape != freq_arr.shape:
+        raise ValueError(
+            f"eps_r size {eps_arr.size} matches neither 1 nor the frequency "
+            f"count {freq_arr.size}"
+        )
+
     rng = np.random.default_rng(seed)
     worst = {"n_nodes": 0.0, "lam_max": 0.0}
     n_rejected = 0
@@ -449,8 +599,10 @@ def check_kx_convergence(
         rho = np.exp(rng.uniform(np.log(rho_bounds[0]), np.log(rho_bounds[1]), size=n_layers))
         thickness = np.exp(rng.uniform(np.log(thickness_bounds[0]), np.log(thickness_bounds[1]), size=max(0, n_layers - 1)))
         try:
-            layers = layers_from_rho_thk(rho, thickness, eps_r)
-            lam0 = min(_default_lam_max(layers, float(f)) for f in np.asarray(freqs_hz, dtype=float).reshape(-1))
+            lam0 = min(
+                _default_lam_max(layers_from_rho_thk(rho, thickness, float(e)), float(f))
+                for f, e in zip(freq_arr, eps_arr)
+            )
             hx1, hz1 = forward_1d_gains(rho, thickness, freqs_hz, off_x, tx_depth_m, rx_depth_m,
                                         eps_r, n_nodes=n_nodes_default)
             hx2, hz2 = forward_1d_gains(rho, thickness, freqs_hz, off_x, tx_depth_m, rx_depth_m,
@@ -502,6 +654,7 @@ def check_kx_convergence(
 
 __all__ = [
     "LAM_MAX_MULTIPLIER",
+    "snap_interfaces_to_grid",
     "ForwardRejected",
     "Layer1D",
     "announce_quadrature_policy",

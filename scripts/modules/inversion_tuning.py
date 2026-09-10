@@ -85,6 +85,7 @@ def split_objective(
     weights=None,
     freq_mask=None,
     snap_dz=None,
+    snap_origin_m=None,
 ) -> Tuple[float, float, float]:
     """`(data_misfit, reg_norm, total)` for the objective the run minimises.
 
@@ -95,6 +96,7 @@ def split_objective(
     return tensor_objective_parts(
         params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r, reg_lambda, cal,
         components=components, weights=weights, freq_mask=freq_mask, snap_dz=snap_dz,
+        snap_origin_m=snap_origin_m,
     )
 
 
@@ -146,6 +148,11 @@ def run_de_once(cfg: Mapping[str, Any], tx_entry: Mapping[str, Any], seed: int) 
             cal=cal,
             components=components,
             weights=weights,
+            # Interface snapping is part of the objective the run minimises.
+            # Omitting it here would tune a budget and a lambda for a DIFFERENT
+            # functional - the same mistake the Kx-only copy of this misfit made.
+            snap_dz=cfg.get("snap_dz"),
+            snap_origin_m=cfg.get("snap_origin_m"),
         )
         return total
 
@@ -171,6 +178,8 @@ def run_de_once(cfg: Mapping[str, Any], tx_entry: Mapping[str, Any], seed: int) 
         cal=cal,
         components=components,
         weights=weights,
+        snap_dz=cfg.get("snap_dz"),
+        snap_origin_m=cfg.get("snap_origin_m"),
     )
     n_data = n_tensor_data(tx_entry, components)
     return {

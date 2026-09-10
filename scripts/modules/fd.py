@@ -250,12 +250,23 @@ def estimate_nt_and_cost(dt_s: float, rec_time_s: float, apertx_m: float, domain
 
 
 def interpolate_rss_python(in_path, out_path, d1f=None, d3f=None, method="bspline", antialias=True):
-    """Interpolate RSS data by calling vendored modint in-process."""
+    """Interpolate RSS data by calling vendored modint in-process.
+
+    `method="nearest"` FORCES `antialias=False`. The triangle-smoothing
+    anti-alias filter is applied before resampling, so leaving it on would blur
+    the step back into a ramp and silently undo the only reason to ask for a
+    blocky resample. It happens to be a no-op for this workshop's own design
+    (`calculate_nbox` returns 0 when the output sampling is finer than the
+    input, which SEG-Y 1.0 m -> FD 0.8 m is), but relying on that is relying on
+    a coincidence of the grid.
+    """
     in_path = Path(in_path)
     out_path = Path(out_path)
     if not in_path.exists():
         raise FileNotFoundError(f"Input RSS file not found: {in_path}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    if str(method).lower().strip() == "nearest":
+        antialias = False
     args = SimpleNamespace(
         input=str(in_path),
         output=str(out_path),

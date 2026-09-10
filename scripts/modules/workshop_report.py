@@ -558,7 +558,12 @@ def collect_1d_inv_rows(summary: Mapping, run_meta: Mapping) -> list[tuple[str, 
         ("Frequencies (Hz)", summary.get("freqs_hz") or cfg.get("freqs_hz")),
         ("f_min (Hz)", summary.get("f_min_hz")),
         ("n_periods_extract", summary.get("n_periods_extract")),
-        ("eps_r_used", summary.get("eps_r_used") or cfg.get("eps_r")),
+        # `or` is wrong here: eps_r_used is a LIST on an acquisition matrix,
+        # and an empty list is falsy while a populated one has no truth value
+        # a numpy array would tolerate. Fall through on absence, not on
+        # falsiness.
+        ("eps_r_used", summary["eps_r_used"] if summary.get("eps_r_used") is not None
+         else cfg.get("eps_r")),
         ("background_rho (Ohm-m)", summary.get("background_rho") or cfg.get("background_rho")),
         ("n_layers", summary.get("n_layers") or cfg.get("n_layers")),
         ("z_start (m)", summary.get("z_start") or cfg.get("z_start")),
