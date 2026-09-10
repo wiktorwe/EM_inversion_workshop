@@ -571,13 +571,16 @@ def tensor_calibration(meta_paths):
 def component_weights(cfg):
     """One weight per TENSOR COMPONENT, from `cfg["w_Cxx"]` and friends.
 
-    The component is the right axis and the receiver is not. `Cxx` and `Czz`
-    are co-components carrying nearly all the amplitude; `Cxz` and `Czx` are
-    near-nulls in a layered Earth, which a 1D model cannot produce at all
-    (`KNOWN_ISSUES.md` section 5). Weighting by receiver ties `Cxx` to `Czx`
-    and `Cxz` to `Czz`, so neither near-null can be downweighted without
-    dragging a co-component with it - the one adjustment this knob exists to
-    make is the one it cannot express.
+    The component is the right axis and the receiver is not. On a colinear
+    survey (`off_z = 0`) `Cxx` and `Czz` carry nearly all the amplitude while
+    `Cxz` and `Czx` sit on the on-axis null of a magnetic line dipole - a
+    property of the GEOMETRY, not of the 1D model, which produces them at full
+    size as soon as the receivers leave the source depth
+    (`scripts/experiments/cross_coupling_geometry.py`, `KNOWN_ISSUES.md`
+    section 5). Weighting by receiver ties `Cxx` to `Czx` and `Cxz` to `Czz`,
+    so neither suppressed component can be downweighted without dragging a
+    co-component with it - the one adjustment this knob exists to make is the
+    one it could not express.
 
     Missing keys default to 1.0, so a cfg that names no weights fits every
     selected component equally.

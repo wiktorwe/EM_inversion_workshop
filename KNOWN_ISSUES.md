@@ -160,17 +160,42 @@ about it). Neither limits this survey - chi2 0.03 is far inside the noise floor
 
 ---
 
-## 5. A 1D inversion cannot fit the cross-couplings
+## 5. The survey reads the cross-couplings on their null
 
-**Status: measured. Unfixed by choice - the fix is a modelling decision.**
+**Status: measured. The cure is an acquisition change, so it is left to the
+user.**
 
-`Cxz` and `Czx` are near-nulls in a layered Earth: a 1D model predicts them
-essentially zero. In the production data they are NOT zero - they are created by
-the 2D fault structure, which is exactly why `experiments/lookahead.py` uses
-them to see ahead of the bit. So a 1D inversion is being asked to fit data its
-model class cannot produce.
+The shipped survey is colinear: receivers sit in the same horizontal well as the
+transmitter, `off_z = 0`. That is exactly the on-axis direction of a magnetic
+line dipole, where `Cxz` (Hz from Kx) is identically zero - and it is a
+property of WHERE THE RECEIVERS ARE, not of the 1D model class. Measured with
+`scripts/experiments/cross_coupling_geometry.py` at 4 kHz, near receiver, as
+|Cxz/Cxx|:
 
-A FITTED sigma hides this, because on those components it is **larger than the
+| depth offset | homogeneous | layered 30/5/30 |
+|---|---|---|
+| 0 m | **0** (exactly) | 3.29e-02 |
+| 0.5 m | 8.08e-02 | 6.36e-02 |
+| 2 m | 3.32e-01 | 3.23e-01 |
+| **5 m** | **9.70e-01** | **1.01e+00** |
+| 10 m | 4.50e+00 | 3.90e+00 |
+
+So a 1D layered model produces these components perfectly well. Layering alone
+lifts them off the null by a few percent; **five metres of depth offset makes
+them the same size as the co-component, with no layering at all.** The reason
+they carry little 1D information here is that this survey is sitting on the one
+geometry that suppresses them.
+
+Two consequences follow, and neither is "the model class is wrong":
+
+1. **The cross-couplings measured on this survey are dominated by whatever is
+   NOT 1D** - which is why `experiments/lookahead.py` can use them to see the
+   fault ahead of the bit. On a depth-offset survey they would carry 1D
+   structure as well, and would no longer be a pure 2D indicator.
+2. **The fit to them is bad because the datum is tiny, not because it is
+   unpredictable in principle.**
+
+A FITTED sigma hides all of this, because on those components it is **larger than the
 datum itself**. Measured on the rebuilt matrix, transmitter 0, near receiver:
 
 | component | \|obs\| | sigma, fitted | sigma, analytic budget | ratio |
@@ -187,21 +212,28 @@ effectively are not. That is the near-null geometry of §8 doing real damage.
 
 The analytic budget gives them their true weight, and the 1D fit to them is then
 bad: reduced chi-squared **342** over all four components, against **1.79** under
-the fitted sigma. The data is no worse; the model is inadequate and now says so.
+the fitted sigma. The data is no worse - the fit is being scored honestly against
+a near-null datum for the first time.
 
 **A claim elsewhere in the docs rests on the fitted sigma.** The skill and
 notebook 05 record that fitting all four components improves both criteria
 (chi2 0.7596 vs 0.8140). That comparison was made where the cross-couplings were
 nearly weightless, so it measured little. Re-run it before quoting it.
 
-**Fix - a modelling decision, not a bug, so it is left to the user.** Notebook
-05 weights each tensor component separately (`w Cxx` ... `w Czz` -> the cfg's
-`w_Cxx` ... `w_Czz`, `inversion_1d.component_weights`), so excluding the
-cross-couplings is `w Cxz = w Czx = 0`, and the reduced chi-squared follows,
-because `n_tensor_data` divides by the weighted count. What is NOT provided is
-the other option - a model-inadequacy term added to their sigma. Inventing that
-term without deriving it would rebuild exactly what the analytic budget
-removed: a noise estimate that is really a fudge factor.
+**The real fix is acquisition: give the receivers a depth offset.** A few metres
+is enough (table above), and it also removes the near-null the Step 02 validation
+sits on - see section 8, which is the same geometry problem seen from the
+calibration side. Nothing in the workshop forbids it: `forward_1d_gains` takes
+per-receiver depths, and the analytic and FDTD paths both handle it.
+
+**Until then, weight the components.** Notebook 05 weights each tensor component
+separately (`w Cxx` ... `w Czz` -> the cfg's `w_Cxx` ... `w_Czz`,
+`inversion_1d.component_weights`), so excluding the cross-couplings is
+`w Cxz = w Czx = 0`, and the reduced chi-squared follows, because
+`n_tensor_data` divides by the weighted count. What is deliberately NOT provided
+is a model-inadequacy term added to their sigma: inventing that term without
+deriving it would rebuild exactly what the analytic budget removed, a noise
+estimate that is really a fudge factor.
 
 ---
 
