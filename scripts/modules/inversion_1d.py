@@ -212,8 +212,9 @@ def complex_gain_objective(
     frequency and receiver, for both Hx and Hz, plus a Tikhonov first-
     difference penalty on log10(rho).
 
-    `C` is the active global FDTD-analytic calibration from notebook 02
-    (homogeneous or lateral-average), shared by all Tx and both Hx/Hz.
+    `C` is the FDTD-to-analytic scale, shared by all Tx and both Hx/Hz. It is
+    COMPUTED (`fd_error_model.analytic_C`), not fitted from a calibration run;
+    notebook 02's run validates it rather than producing it.
 
     `freq_mask` (boolean, length nfreq) restricts the misfit to a subset of the
     frequencies - one stage of a multi-scale ladder. `sigma_hx`, `sigma_hz` and

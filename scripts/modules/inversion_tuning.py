@@ -100,6 +100,27 @@ def split_objective(
     )
 
 
+def _require_calibratable(cfg: Mapping[str, Any]) -> None:
+    """Fail early if the tuner could not build a calibration at all.
+
+    A tuner that silently optimises a different functional from the run is the
+    failure this module exists to prevent, so the check stays - but what counts
+    as usable has changed. `C` is now COMPUTED from `dx` and `fd_order`
+    (`inversion_1d.analytic_tensor_calibration`), so a cfg carrying those is
+    fully calibratable and needs nothing from notebook 02. The old check
+    demanded a fitted calibration and would now reject a perfectly good cfg.
+    """
+    if "tensor_calibration" in cfg or "calibration" in cfg:
+        return
+    if cfg.get("dx") is not None and cfg.get("fd_order") is not None:
+        return
+    raise ValueError(
+        "cfg cannot produce a calibration: give it 'dx' and 'fd_order' (C is "
+        "computed from them), or a resolved 'tensor_calibration', or the flat "
+        "Kx-only 'calibration'."
+    )
+
+
 def _components_and_cal(cfg: Mapping[str, Any], tx_entry=None):
     """The components, calibration and weights the tuners must use.
 
@@ -248,11 +269,7 @@ def tune_de_budget(
     n_jobs: int = -1,
 ) -> Dict[str, Any]:
     """Raise DE budget until multi-seed total-objective spread is within tol."""
-    if "calibration" not in cfg and "tensor_calibration" not in cfg:
-        raise ValueError(
-            "cfg must include a calibration from notebook 02 - either the flat "
-            "'calibration' (Kx-only) or a resolved 'tensor_calibration'."
-        )
+    _require_calibratable(cfg)
     base_seed = int(cfg.get("seed", 42) if base_seed is None else base_seed)
     n_seeds = max(int(n_seeds), 1)
     seeds = [base_seed + k for k in range(n_seeds)]
@@ -376,11 +393,7 @@ def tune_lambda_lcurve(
     n_jobs: int = -1,
 ) -> Dict[str, Any]:
     """Sweep lambda at fixed DE popsize/maxiter; pick L-curve corner."""
-    if "calibration" not in cfg and "tensor_calibration" not in cfg:
-        raise ValueError(
-            "cfg must include a calibration from notebook 02 - either the flat "
-            "'calibration' (Kx-only) or a resolved 'tensor_calibration'."
-        )
+    _require_calibratable(cfg)
     seed = int(cfg.get("seed", 42) if seed is None else seed)
     lam_list = [float(v) for v in lambdas]
     jobs = [(cfg, tx_entry, lam, seed) for lam in lam_list]

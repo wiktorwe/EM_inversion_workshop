@@ -84,7 +84,27 @@ python scripts/validate_notebooks.py     # executes every code cell
 python scripts/dev/bugsweep.py           # undefined names + unbound buttons
 python scripts/dev/handlersweep.py       # CALLS every handler in every notebook
 python scripts/dev/chainsweep.py         # every notebook against a MATRIX workspace
+python scripts/dev/docsweep.py           # PROSE that describes code that is gone
 ```
+
+**These four are blind to the most common failure here.** They check names,
+execution, handler exceptions and path binding. NONE of them can see a sentence
+that has become false, or a guard that still demands a dependency the code has
+dropped. `C(f)` became computed while notebook 02's panel still told the user it
+was what Steps 05/06 read, the README said the same, and the guard that used to
+be called `require_global_calibration` still RAISED - so Step 05 refused to
+invert on an uncalibrated workspace. All four sweeps passed the whole time. So:
+
+- `docsweep.py` closes the mechanical half: a backticked symbol in prose that no
+  longer exists in code. It cannot judge whether a true-sounding sentence is
+  still true.
+- For the semantic half there is no tool, only a rule: **when you change what an
+  input IS, delete that input and run the app.** Removing every calibration
+  block from the workspace and re-running the inversion is what found the guard
+  breakage described above; no sweep did.
+- And re-read the plan before saying "done", accounting for every step. That
+  breakage existed because a step that was written down ("rewrite the panel
+  HTML") was simply never executed.
 
 `validate_notebooks.py` alone is NOT enough: it executes the cell but never
 clicks anything, so a `NameError` inside a callback passes it and still breaks

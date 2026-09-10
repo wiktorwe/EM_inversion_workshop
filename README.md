@@ -34,9 +34,12 @@ After enabling GPU forward, re-run **Step 01 → Finalize setup** so
 - **Step 01** writes `workspace/2D/forward/setup_metadata.json` with frequencies
   (`flist_hz`), `n_periods_extract`, `eps_r_used`, survey geometry, and FD design.
   Later notebooks (02, 04, 05, 06) read those values as widget defaults.
-- **Step 02** appends the global FDTD–analytic calibration into the same file
-  (homogeneous `rho_min` or 1D lateral average of the true model; last successful
-  run overwrites the active `C`).
+- **Step 02** appends the FDTD–analytic calibration into the same file, as a
+  VALIDATION record. `C(f)` is COMPUTED, not fitted - `C = dx*dz*s(order)`, from
+  how the engine injects a source into one cell (`scripts/modules/fd_error_model.py`).
+  Steps 05/06 compute it and do not read it from `setup_metadata.json`; the
+  Step 02 run reports how far the fitted value lands from the computed one
+  (measured worst 0.430 %, band 0.5 %).
 - **Step 05** writes a full per-run report under each
   `workspace/1D/inversion/OneDRunN/` folder:
   `REPORT.md` (human-readable), `analytic_1d_inversion_summary.json`, and
@@ -128,10 +131,11 @@ This removes `workspace/` plus Voila PID files and caches. It does **not** delet
 Cleaning **does** delete remembered setup parameters and run reports:
 
 - `setup_metadata.json` (frequencies / design from Step 01)
-- calibration stored there by Step 02
+- the Step 02 validation record stored there (not needed to invert - C is computed)
 - every `OneDRunN/REPORT.md` and summary from Step 05
 
-After `./clean.sh`, re-run Step 01 (and a Calibrate button in Step 02) before Steps 02–06.
+After `./clean.sh`, re-run Step 01 before Steps 02-06. Step 02's validation is
+optional: `C(f)` is computed, so an uncalibrated workspace still inverts.
 
 ## 4) Workspace layout
 
@@ -167,8 +171,9 @@ Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
 
 2. **Step 02 — FW modelling and data visualization**
    - Frequencies / `n_periods` load from `setup_metadata.json`.
-   - Run forward modelling; use a **Calibrate** button (homogeneous `rho_min`
-     or 1D lateral average of the true model) to store global `C(f)`.
+   - Run forward modelling. **Validate C** (homogeneous `rho_min` or 1D lateral
+     average of the true model) is optional - it checks the computed `C(f)`
+     against a fitted one; the inversion computes `C` either way.
    - Inspect Hx/Hz data, amplitudes, and phases.
 
 3. **Step 03 — 2D inversion**
