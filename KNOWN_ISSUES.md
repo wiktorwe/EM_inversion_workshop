@@ -289,19 +289,50 @@ path.
 
 ---
 
-## 8. Cxz-vs-Czx look-ahead distances are partly a threshold artifact
+## 8. The reported Cxz-vs-Czx look-ahead distances predate the current threshold
 
-**Status: a caveat on a reported result, not a bug.**
+**Status: the threshold is fixed in code; the numbers need re-running.**
 
-`Czx` appears to detect the fault ~40 % further ahead than `Cxz` (112 m vs 76 m
-at 1 kHz). They are the same physical quantity under reciprocity and differ only
-through lateral structure. Most of the gap is that `Czx` is read on **Hx**
-(calibration scatter 0.064 %) while `Cxz` is read on **Hz** (2.649 %) - a 41x
-looser threshold, because Hz-from-Kx at zero depth offset IS the near-null.
+`Czx` was reported to detect the fault ~40 % further ahead than `Cxz` (112 m vs
+76 m at 1 kHz). They are the same physical quantity under reciprocity and differ
+only through lateral structure, so a gap that large is a measurement artifact.
+It came from the DETECTION THRESHOLD: `Czx` is read on Hx and `Cxz` on Hz, and
+both thresholds were taken from the calibration's residual scatter - 0.064 % on
+Hx against 2.649 % on Hz, a 41x difference produced by fitting Hz on its own
+near-null.
 
-Improving the Hz calibration (more receivers, or a geometry where Hz is not a
-null) would make the comparison fair. That needs new FDTD runs on a new
-geometry, which is why it is still here.
+`lookahead.py` and `fault_couplings.py` now threshold on
+`fault_couplings.departure_thresholds` instead: the part of the analytic error
+budget that does NOT cancel between the fault run and the reference run, which
+is the interface quantisation. The two runs share a grid, a survey and a time
+step, so the `(dx/r)^2` kernel error, the stencil factor and the solver's kx
+quadrature are identical in both and divide out of a departure ratio.
+
+**This makes the threshold defensible, but it does NOT close the gap at 1 kHz.**
+The new floors, on the production grids:
+
+| tone | Hx floor | Hz floor | Hz/Hx |
+|---|---|---|---|
+| 1 kHz | 0.116 % | 5.78 % | **50x** |
+| 2 kHz | 0.528 % | 6.58 % | 12x |
+| 4 kHz | 2.35 % | 7.70 % | 3.3x |
+| 6 kHz | 4.02 % | 8.53 % | 2.1x |
+
+The ratio collapses to 2-3x at the top of the band, but at 1 kHz - the tone the
+112 m / 76 m comparison was made at - it is 50x, no better than the 41x it
+replaces. The reason is no longer a fitted null but a physical one: Hz at zero
+depth offset IS the near-null of section 5, so a half-cell interface move
+changes it by a much larger FRACTION than it changes Hx. A derived floor
+reports that honestly instead of hiding it, but it cannot remove it.
+
+**So the Cxz-vs-Czx comparison is still not fair at low frequency**, and the fix
+is the one section 5 names: give the receivers a depth offset. That removes the
+null and the lopsided floor together. Comparing the two couplings at 4-6 kHz is
+sound in the meantime.
+
+**The published 112 m / 76 m numbers were measured with the old threshold and
+should not be quoted.** Re-measuring them costs about 90 minutes of FDTD on this
+machine (see the timing note in `lookahead.py`); nothing else blocks it.
 
 ---
 

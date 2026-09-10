@@ -49,6 +49,8 @@ import numpy as np
 
 from scripts.modules.fd_visualization import compute_gains_for_fd_outputs
 from scripts.modules.headless import SetupParams, build_forward_inputs, run_forward
+from scripts.modules.fd_error_model import (  # noqa: E402
+    MIN_REL_ERROR, interface_quantisation_rel)
 
 # Vertical fault in examples/Fault_1.sgy: the layer stack steps from
 # interfaces at z = 6020 / 6070 / 6080 m to 6030 / 6070 / 6090 m between the
@@ -155,6 +157,58 @@ def ensure_production_run(run_dir: Path, source_field: str, *, nproc: int = 6,
     return {"dir": run_dir, "meta": meta, "wall_s": timing["wall_s"], "reused": False}
 
 
+def offsets_from_meta(meta):
+    """The receiver offsets a run's own setup metadata implies, in metres."""
+    n = int(meta["nrx"])
+    return np.asarray([float(meta["rx0_m"]) + k * float(meta["drx_m"])
+                       for k in range(n)], dtype=float)
+
+
+def departure_thresholds(meta, freqs_hz, offsets_m=None):
+    """The relative departure below which a difference between two runs is not a
+    measurement, per observable.
+
+    WHY THIS IS NOT THE FULL ERROR BUDGET, and not the calibration scatter
+    either. A departure here is a ratio of two FDTD runs that share a grid, a
+    survey, a time step and a source: the fault model against a laterally
+    invariant reference. Every error term the two runs have in COMMON divides
+    out of that ratio - the `(dx/r)^2` source/receiver kernel error, the stencil
+    consistency factor, and the analytic solver's kx quadrature, which does not
+    enter an FDTD-vs-FDTD comparison at all.
+
+    What does not cancel is where each model puts its interfaces. The two models
+    differ near the fault, they quantise differently there, and half a cell is
+    the irreducible placement uncertainty of any gridded method. So the floor is
+    the interface-quantisation term alone
+    (`fd_error_model.interface_quantisation_rel`), by RECEIVER component,
+    floored at `fd_error_model.MIN_REL_ERROR`.
+
+    Charging the difference for errors both runs share understates every
+    detection distance. It also does so UNEVENLY: a floor taken from the
+    calibration's residual scatter is read on Hz at zero depth offset, which is
+    a near-null (`KNOWN_ISSUES.md` sections 5 and 8), so it penalises the
+    Hz-receiver observables far more than the Hx-receiver ones and makes `Czx`
+    look like it sees further than `Cxz` when the two are the same quantity
+    under reciprocity.
+    """
+    freqs = np.asarray(freqs_hz, dtype=float).reshape(-1)
+    off = (offsets_from_meta(meta) if offsets_m is None
+           else np.asarray(offsets_m, dtype=float).reshape(-1))
+    quant = interface_quantisation_rel(
+        freqs_hz=freqs,
+        offsets_m=off,
+        tx_depth_m=float(meta["tz0_m"]),
+        eps_r=meta["eps_r_used"],
+        dx_m=float(meta["dx_model_target_m"]),
+    )
+    hx = np.maximum(np.asarray(quant["HX"], dtype=float), MIN_REL_ERROR)
+    hz = np.maximum(np.asarray(quant["HZ"], dtype=float), MIN_REL_ERROR)
+    # Keyed by the RECEIVER each observable is read on: Cxx/Czx are Hx, Cxz/Czz
+    # are Hz. `S = Cxz + Czx` mixes the two, so it takes the smaller floor.
+    return {"Cxx": hx, "Cxz": hz, "Czx": hx, "Czz": hz,
+            "S": np.minimum(hx, hz)}
+
+
 def stage_fault(work_dir: Path, nproc: int = 6, verbose: bool = True,
                 hx_dir: Path | None = None, hz_dir: Path | None = None) -> dict:
     work_dir = Path(work_dir)
@@ -217,23 +271,22 @@ def stage_fault(work_dir: Path, nproc: int = 6, verbose: bool = True,
     # --- background level and detection distance -------------------------
     # "Background" is taken from the transmitters FARTHEST from the fault on the
     # approach side, where the Earth beneath the tool is laterally invariant.
-    # A departure counts once it exceeds the calibration's own residual scatter
-    # for that component - the level below which FDTD and the analytic solver
-    # already disagree, so nothing smaller is a measurement.
+    # A departure counts once it exceeds the modelling floor for that receiver
+    # component - see `departure_thresholds` for why that floor is the interface
+    # quantisation and not the whole error budget.
     tx_x = gx["tx_x"]
     dist = FAULT_X_M - tx_x
     far = dist >= np.percentile(dist[dist > 0], 60) if np.any(dist > 0) else np.zeros_like(dist, bool)
-    cal = json.loads((Path(runs["HX"]["dir"]) / "setup_metadata.json").read_text()) \
-        .get("fdtd_analytic_calibration_by_source", {}).get("HX") or {}
-    scat_hx = np.asarray(cal.get("scatter_hx_pct", [np.nan] * len(out["freqs_hz"])), float) / 100.0
-    scat_hz = np.asarray(cal.get("scatter_hz_pct", [np.nan] * len(out["freqs_hz"])), float) / 100.0
-    thresholds = {"Cxx": scat_hx, "Cxz": scat_hz, "Czx": scat_hx, "Czz": scat_hz,
-                  "S": np.minimum(scat_hx, scat_hz)}
+    thresholds = departure_thresholds(
+        runs["HX"]["meta"], out["freqs_hz"], out["offsets_m"])
+    out["thresholds"] = {k: np.asarray(v, dtype=float).tolist()
+                         for k, v in thresholds.items()}
 
     print("\n=== distance ahead of the fault at which each observable departs "
           "from background ===")
-    print("Departure is measured against the CALIBRATION SCATTER for that component -")
-    print("the level below which FDTD and the analytic solver already disagree.")
+    print("Departure is measured against the INTERFACE QUANTISATION floor for that")
+    print("receiver component - the only part of the error budget that does not cancel")
+    print("between the fault run and the reference run (see `departure_thresholds`).")
     print("S = Cxz + Czx is identically ZERO in a laterally invariant Earth, so it needs")
     print("no empirical background at all: it is normalised by |Cxx| (a real coupling)")
     print("and compared against the measured FDTD reciprocity floor.")

@@ -14,10 +14,21 @@ APERTURE note in `fault_couplings.py`). Three things differ here:
    so there are transmitters that genuinely see nothing and can serve as
    background.
 
-3. **Each frequency runs on its own grid** (Task 2). That is what makes this
-   affordable: a wide-aperture broadband run would cost ~21 min per source,
-   while the four per-frequency runs cost ~10 min per source for the same
-   information.
+3. **Each frequency runs on its own grid.** That is what makes this affordable:
+   the record length follows each tone instead of the lowest one in the band,
+   so `nt` stays near 33k per run rather than the ~197k a 1-6 kHz broadband run
+   needs at the 6 kHz cell size.
+
+WHAT THIS COSTS, measured on a 6-core run of the shipped configuration
+(`apertx=400`, `ntx=32`): the 1 kHz stage takes **133 s**. Cost scales as
+`ntx * (apertx/dx) * (1/dx) * nt`, which reproduces that measurement to better
+than 1 % and the production matrix's own timings to ~15 %, giving
+
+    1 / 2 / 4 / 6 kHz   ~2.2 / 2.3 / 5.3 / 7.3 min per (source, model)
+    x 2 sources x 2 models (fault, reference)   ~= 69 min total
+
+`fault_couplings.stage_fault` is two BROADBAND production runs, ~11 min each,
+so the pair of experiments is about 90 minutes on this machine.
 
 THE BACKGROUND IS A SECOND MODEL, NOT A FAR TRANSMITTER
 -------------------------------------------------------
@@ -58,7 +69,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.experiments.fault_couplings import FAULT_X_M, per_tx_gains  # noqa: E402
+from scripts.experiments.fault_couplings import (  # noqa: E402
+    FAULT_X_M, departure_thresholds, per_tx_gains)
 from scripts.modules.headless import (  # noqa: E402
     SetupParams, build_forward_inputs, run_forward,
 )
@@ -163,17 +175,22 @@ def main() -> int:
     out: dict = {"fault_x_m": FAULT_X_M, "apertx_m": args.apertx,
                  "half_aperture_m": half, "observables": {}, "detection": {}}
 
-    # Detection threshold: the calibration scatter for that component, i.e. the
-    # level below which FDTD and the analytic solver already disagree.
-    cal_meta = json.loads(
-        (Path("workspace/2D/forward") / "setup_metadata.json").read_text()
-    ).get("fdtd_analytic_calibration", {})
-    scat_hx = np.mean(cal_meta.get("scatter_hx_pct", [0.5])) / 100.0
-    scat_hz = np.mean(cal_meta.get("scatter_hz_pct", [3.0])) / 100.0
-    thresholds = {"Cxx": scat_hx, "Cxz": scat_hz, "Czx": scat_hx,
-                  "Czz": scat_hz, "S": min(scat_hx, scat_hz)}
-    print(f"\nthresholds from the production calibration scatter: "
-          f"Hx {100*scat_hx:.3f} %, Hz {100*scat_hz:.3f} %")
+    # Detection threshold: the modelling floor that survives a fault-vs-reference
+    # difference, PER FREQUENCY, because each tone here is modelled on its own
+    # grid and the floor is a grid property. See `departure_thresholds` - the
+    # terms both runs share cancel out of the ratio, so this is the interface
+    # quantisation and not the whole error budget.
+    thresholds_by_freq = {}
+    for f in args.freqs:
+        meta = results[f"{f:.0f}_HX_fault"]["meta"]
+        thresholds_by_freq[f] = departure_thresholds(meta, [f])
+    print("\nthresholds from the interface-quantisation floor of each tone's own grid:")
+    for f in args.freqs:
+        t = thresholds_by_freq[f]
+        print(f"  {f:7.0f} Hz  "
+              f"dx={float(results[f'{f:.0f}_HX_fault']['meta']['dx_model_target_m']):.3f} m"
+              f"   Hx {100*float(np.min(t['Cxx'])):.3f} %"
+              f"   Hz {100*float(np.min(t['Cxz'])):.3f} %")
 
     print("\n=== fault model vs laterally invariant reference, same survey and grid ===")
     for f in args.freqs:
@@ -197,7 +214,7 @@ def main() -> int:
             # rather than by its own (near-zero) reference value.
             denom = (np.abs(Cr["Cxx"][0, :, 0]) if name == "S" else np.abs(b))
             dep = np.abs(a - b) / np.maximum(denom, 1e-300)
-            thr = thresholds[name]
+            thr = float(np.min(thresholds_by_freq[f][name]))
             ok = (dep > thr) & (dist > 0)
             det = float(np.max(dist[ok])) if np.any(ok) else None
             ref_null = float(np.median(np.abs(Cr["S"][0, :, 0])
@@ -218,7 +235,7 @@ def main() -> int:
         print(f"(figure not written: {exc})")
     print(f"\nDetection distances are the largest tool-to-fault distance at which the")
     print("observable differs from the SAME configuration on a laterally invariant")
-    print("model by more than the calibration scatter. They are bounded by the survey")
+    print("model by more than the quantisation floor. They are bounded by the survey")
     print(f"({far:.0f} m) and by the aperture half-width ({half:.0f} m), whichever is smaller -")
     print("a value at either limit is a lower bound, not a measurement.")
     return 0
