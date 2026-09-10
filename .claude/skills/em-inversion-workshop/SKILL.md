@@ -15,6 +15,56 @@ description: Use when working on the EM_inversion_workshop repo - the Voila/Jupy
 5. **The docs are part of the chain.**
 
 
+## THE WORKSPACE IS DISPOSABLE. NEVER LET IT BLOCK A FIX.
+
+**`workspace/` holds no source. Overwrite it, delete it, rebuild it - whatever
+the change needs. Datasets, calibrations, inversion runs and reports are all
+regenerable output, and none of them is a reason to narrow, defer or water down
+a fix.**
+
+This is a standing instruction from the repo's owner, and it overrides any
+instinct to preserve what is on disk. If a correct change invalidates every
+dataset and every calibration in the workspace, make the change.
+
+It is written here because the opposite reasoning had already reached
+`KNOWN_ISSUES.md` and kept a real bug alive: the interface-quantisation entry
+argued that fixing it "changes the forward model and so invalidates every
+dataset and calibration on disk. That is why it is not in the quick-fix set."
+That was the ONLY thing keeping it unfixed. The fix took minutes once the
+excuse was dropped, and the true-model chi-squared went 0.0660 -> 0.0296.
+
+So:
+
+- Do not propose a worse fix to avoid a rebuild.
+- Do not leave an entry in `KNOWN_ISSUES.md` because fixing it costs a rebuild.
+  "It would invalidate the data on disk" is not a status; it is a cost, and a
+  small one.
+- Do not ask permission to overwrite `workspace/`. It is gitignored, so it is
+  never in a commit and never in a diff.
+- DO say plainly, in the change and in the commit message, that models built
+  before it are not comparable with ones built after. That is the real
+  obligation - not preservation, but honesty about comparability.
+
+Rebuilding is cheap and scripted:
+
+```bash
+python scripts/rebuild_matrix_workspace.py                    # Step 01, seconds
+python scripts/run_matrix.py --method lateral_average_true    # model + calibrate
+```
+
+Measured on this machine: 3 tones x 2 sources = 6 datasets, modelled AND
+calibrated in **9.0 min** total.
+
+Two things to remember rather than worry about:
+
+- `scripts/dev/chainsweep.py` needs a dataset to build its fixture from, so
+  with an empty workspace it reports **NOT VERIFIED**, not PASS. Rebuild, then
+  re-run it. The other three sweeps pass on an empty workspace.
+- The numbers quoted in `KNOWN_ISSUES.md` and `doc/numerics_findings.md` are
+  measurements, not fixtures. If a change invalidates them, RE-MEASURE and
+  update them (RULE 5) - do not preserve stale data to keep an old number true.
+
+
 ## RULE 1 - DO NOT LEAVE A BUG BEHIND
 
 **Never hand over code with a known-broken reference, a dead symbol, an

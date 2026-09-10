@@ -15,6 +15,13 @@ someone to re-investigate a problem that no longer exists - or, worse, lets them
 trust something that is still broken because its entry was quietly deleted
 without the fix. See RULE 5 in `.claude/skills/em-inversion-workshop/SKILL.md`.
 
+**"It would invalidate the data on disk" is never a reason for an entry to stay
+here.** `workspace/` is regenerable output, not source - overwrite it, clean it,
+rebuild it. That excuse kept the interface-quantisation entry alive on its own,
+and the fix took minutes once it was dropped. Say that models built before a
+change are not comparable with ones built after, re-measure whatever numbers the
+change invalidates, and move on. See "THE WORKSPACE IS DISPOSABLE" in the skill.
+
 ---
 
 ## 1. Joint multi-source 2D FWI is not possible with the current engine
