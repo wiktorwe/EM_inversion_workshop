@@ -165,14 +165,32 @@ about it). Neither limits this survey - chi2 0.03 is far inside the noise floor
 **Status: measured. The cure is an acquisition change, so it is left to the
 user.**
 
-The shipped survey is colinear: receivers sit in the same horizontal well as the
-transmitter, `off_z = 0`. That is exactly the on-axis direction of a magnetic
-line dipole, where `Cxz` (Hz from Kx) is identically zero - and it is a
-property of WHERE THE RECEIVERS ARE, not of the 1D model class. Measured with
-`scripts/experiments/cross_coupling_geometry.py` at 4 kHz, near receiver, as
-|Cxz/Cxx|:
+`Cxz` and `Czx` vanish under ONE condition, and it is a SYMMETRY condition, not
+a limit on the model class:
 
-| depth offset | homogeneous | layered 30/5/30 |
+> the receiver sits at the source depth, AND `sigma(z)` is mirror-symmetric
+> about that depth.
+
+Reflecting z about the source plane flips the sign of Hz for a Kx source, so an
+invariant medium and an in-plane receiver force the field to equal minus itself.
+A homogeneous whole space is the trivial case of that symmetry, not a separate
+rule. The shipped survey is colinear (`off_z = 0`), so it satisfies the first
+half exactly and lands wherever the Earth's own asymmetry puts it.
+
+Measured with `scripts/experiments/cross_coupling_geometry.py` at 4 kHz, near
+receiver. Breaking the SYMMETRY, receiver still at the source depth:
+
+| stack (source in the middle layer) | \|Cxz/Cxx\| |
+|---|---|
+| `100 / 30 (src) 30 / 100` - symmetric | 3.7e-13 (numerical zero) |
+| `100 / 30 (src) 30 / 101` - 1 % resistivity asymmetry | 1.7e-05 |
+| `100 / 30 (src) 30 / 120` - 20 % resistivity asymmetry | 2.9e-04 |
+| `100 / 30 / 100`, layer centre 2 m off the source | 5.5e-03 |
+| `100 / 30 / 100`, layer centre 5 m off the source | 1.5e-02 |
+
+Breaking the GEOMETRY, moving the receiver off the source depth:
+
+| depth offset | homogeneous | asymmetric layers |
 |---|---|---|
 | 0 m | **0** (exactly) | 3.29e-02 |
 | 0.5 m | 8.08e-02 | 6.36e-02 |
@@ -180,11 +198,11 @@ property of WHERE THE RECEIVERS ARE, not of the 1D model class. Measured with
 | **5 m** | **9.70e-01** | **1.01e+00** |
 | 10 m | 4.50e+00 | 3.90e+00 |
 
-So a 1D layered model produces these components perfectly well. Layering alone
-lifts them off the null by a few percent; **five metres of depth offset makes
-them the same size as the co-component, with no layering at all.** The reason
-they carry little 1D information here is that this survey is sitting on the one
-geometry that suppresses them.
+So a 1D model produces these components perfectly well. Asymmetry of the Earth
+about the transmitter lifts them off the null on its own; **five metres of depth
+offset makes them the same size as the co-component, with no layering at all.**
+The reason they carry little 1D information on this survey is that it sits on
+the one geometry that suppresses them.
 
 Two consequences follow, and neither is "the model class is wrong":
 
