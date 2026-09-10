@@ -33,3 +33,6 @@ Results/
 
 # Local temp workspace
 tmp/
+
+# Voila/Jupyter local state
+jupyter_config/migrated
