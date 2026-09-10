@@ -1,13 +1,14 @@
 """Does the BlockInv optimizer actually fit the full 2x2 tensor?
 
 BlockInv packs the data, the errors and the Gauss-Newton Jacobian into flat real
-vectors. That packing used to have arity 2 hardcoded in five places, so the
-optimizer could only ever fit the Kx pair and refused anything else outright.
-This checks the generalised packing on real FDTD data:
+vectors. The arity of that packing has to follow the component list: fix it at
+2 anywhere - the packing, the sigma vector, the residual weighting or the FD
+Jacobian's row count - and the optimizer can only ever fit the Kx pair. This
+checks the packing on real FDTD data:
 
-1. REGRESSION - on Cxx+Cxz it must reproduce the pre-change result exactly.
-   A generalisation that changes the two-component answer is a regression, not
-   a feature.
+1. REGRESSION - on Cxx+Cxz it must reproduce the two-component reference
+   exactly. A packing that changes the two-component answer is a regression,
+   not a feature.
 2. TENSOR - on all four components it must run to completion and land in the
    same region as Differential Evolution, which reaches chi2 ~0.76 /
    model err ~0.54 here (see `tensor_1d_test.py`).

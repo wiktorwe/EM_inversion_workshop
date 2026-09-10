@@ -87,17 +87,18 @@ python scripts/dev/chainsweep.py         # every notebook against a MATRIX works
 python scripts/dev/docsweep.py           # PROSE that describes code that is gone
 ```
 
-**These four are blind to the most common failure here.** They check names,
+**These sweeps are blind to the most common failure here.** They check names,
 execution, handler exceptions and path binding. NONE of them can see a sentence
 that has become false, or a guard that still demands a dependency the code has
 dropped. `C(f)` became computed while notebook 02's panel still told the user it
 was what Steps 05/06 read, the README said the same, and the guard that used to
 be called `require_global_calibration` still RAISED - so Step 05 refused to
-invert on an uncalibrated workspace. All four sweeps passed the whole time. So:
+invert on an uncalibrated workspace. The other sweeps passed the whole time. So:
 
 - `docsweep.py` closes the mechanical half: a backticked symbol in prose that no
-  longer exists in code. It cannot judge whether a true-sounding sentence is
-  still true.
+  longer exists in code, a temporal word in GUI text, and a notebook section its
+  own intro cell never mentions. It cannot judge whether a true-sounding
+  sentence is still true.
 - For the semantic half there is no tool, only a rule: **when you change what an
   input IS, delete that input and run the app.** Removing every calibration
   block from the workspace and re-running the inversion is what found the guard
@@ -432,7 +433,8 @@ Where each of those goes instead:
 | parameter meaning and impact, longer descriptions | `doc/gui_manual.tex` |
 | workflow, install, layout | `README.md` |
 | measured numbers and how they were obtained | `doc/numerics_findings.md` |
-| why the code is the way it is, and what it used to be | CODE COMMENTS - developer-facing, and RULE 4 wants that history kept |
+| why the code must be the way it is - the CONSTRAINT and its reason | CODE COMMENTS, present tense (see below) |
+| what the code used to be | THE COMMIT MESSAGE, and RULE 4's breakage table |
 
 ### AND DO NOT TRACK CHANGES IN DOCSTRINGS OR COMMENTS EITHER
 
@@ -465,6 +467,24 @@ scattered through the source.
 `scripts/dev/docsweep.py` checks user-facing strings for temporal words. Comments
 and docstrings are judged by the test above, not by regex, because a constraint
 and a changelog entry can use the same words.
+
+### A NOTEBOOK'S INTRO CELL IS A DELIVERABLE, AND IT GOES STALE SILENTLY
+
+**When a notebook gains, loses or repurposes a SECTION, its intro markdown cell
+is a mandatory site in the consequence table. Every section the notebook has
+must be visible in the sentence that says what the step is for.**
+
+This is the one failure mode no symbol-level sweep can reach on its own. An
+intro that describes two of five sections contains no dead symbol and no
+temporal word: every word in it is TRUE. It is still wrong, and it is the first
+thing a user reads - notebook 02 described modelling and plotting while also
+running the whole acquisition matrix and extracting the channel gains Steps
+05/06 invert.
+
+`docsweep.py`'s third check closes the mechanical half: every numbered section
+heading must have one of its distinctive words in the intro, stem-matched. It
+cannot judge whether the sentence describes the section WELL - that is the
+consequence table's job.
 
 
 ## THE CHAIN, link by link

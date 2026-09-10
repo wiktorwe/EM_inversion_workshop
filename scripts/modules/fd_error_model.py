@@ -2,9 +2,9 @@
 
 WHY THIS EXISTS
 ---------------
-`C(f)` used to be fitted by running an extra FDTD job on a reference Earth and
-least-squares matching it to the analytic solver
-(`fdtd_analytic_calibration.fit_global_C_per_frequency`). Two things were wrong
+The obvious alternative to computing `C(f)` is to FIT it: run an extra FDTD job
+on a reference Earth and least-squares match it to the analytic solver
+(`fdtd_analytic_calibration.fit_global_C_per_frequency`). Two things are wrong
 with that as a PRODUCTION mechanism:
 
 1. **It measures almost nothing.** `|C|` is derivable. The engine injects the
@@ -14,17 +14,17 @@ with that as a PRODUCTION mechanism:
    ``|C|/dx^2 = 0.99931 - 0.99954``. The remaining ~0.05 % is the stencil
    consistency factor computed below (0.012 %) plus an offset-dependent term.
 
-2. **It was fitted where a component is a near-null.** For a Kx line source in a
+2. **It is fitted where a component is a near-null.** For a Kx line source in a
    layered Earth, Hz vanishes identically at the source depth. The homogeneous
    calibration breaks that with receivers at +/-20 m; the lateral-average one
    keeps the production colinear geometry, so Hz is fitted ON the null. That is
-   where its 2.6-6.5 % residual scatter comes from - and that scatter became
+   where its 2.6-6.5 % residual scatter comes from - and that scatter becomes
    `sigma` for `Cxz`/`Czz`, the cross-couplings that carry the look-ahead
    signal. A noise estimate manufactured by a bad geometry is worse than no
    calibration at all.
 
-So `C` is computed here, and the FDTD calibration run becomes a VALIDATION that
-the computed value holds rather than the source of it.
+So `C` is computed here, and the FDTD calibration run is a VALIDATION that the
+computed value holds rather than the source of it.
 
 WHAT IS AND IS NOT IN THE BUDGET
 --------------------------------

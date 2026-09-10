@@ -55,21 +55,17 @@ DEFAULT_SEED_SPREAD_TOL = 0.05
 DEFAULT_N_TUNE_SEEDS = 5
 
 
-# The model parameterisation, the bounds and the per-Tx analytic forward used to
-# be duplicated here, verbatim from notebook 05's cell. That third copy also
-# carried notebook 05's `rx_depth_m = tx_z + off_z[0]` bug (every receiver forced
-# to the FIRST receiver's depth) - which is precisely how a duplicated
-# implementation drifts: the fix landed in the notebook and left this copy
-# behind. They now come from `scripts.modules.inversion_1d`, the single
-# implementation the notebook also imports.
+# NOTHING HERE REIMPLEMENTS THE RUN. The model parameterisation, the bounds,
+# the per-Tx analytic forward and the MISFIT all come from
+# `scripts.modules.inversion_1d` - the single implementation notebook 05 also
+# imports. `split_objective` delegates to `tensor_objective_parts`, which
+# `tensor_objective` returns its total from: one implementation, three numbers.
 #
-# The MISFIT was the last piece still duplicated here, and it had drifted the
-# same way: it stayed a two-component Kx-only functional after the run it is
-# supposed to tune grew to the full 2x2 tensor, so with Czx/Czz selected these
-# tuners recommended a DE budget and a lambda for an objective nobody was
-# minimising. It now delegates to `inversion_1d.tensor_objective_parts`, which
-# `tensor_objective` also returns its total from - one implementation, three
-# numbers, no second copy to drift.
+# A tuner is uniquely exposed to duplication drift, because its output is a
+# recommendation and not a result: a copy that keeps a two-component Kx-only
+# functional while the run fits the full 2x2 tensor still returns a DE budget
+# and a lambda, for an objective nobody is minimising, and nothing about the
+# number says so. One detail is enough - a receiver depth, a component list.
 
 
 def split_objective(
@@ -90,8 +86,8 @@ def split_objective(
     """`(data_misfit, reg_norm, total)` for the objective the run minimises.
 
     `cal` is the per-source/per-component shape that
-    `inversion_1d.resolve_tensor_calibration` returns, NOT the flat
-    `sigma_hx`/`sigma_hz`/`C` triple this function used to take.
+    `inversion_1d.resolve_tensor_calibration` returns, not a flat
+    `sigma_hx`/`sigma_hz`/`C` triple.
     """
     return tensor_objective_parts(
         params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r, reg_lambda, cal,
@@ -104,11 +100,11 @@ def _require_calibratable(cfg: Mapping[str, Any]) -> None:
     """Fail early if the tuner could not build a calibration at all.
 
     A tuner that silently optimises a different functional from the run is the
-    failure this module exists to prevent, so the check stays - but what counts
-    as usable has changed. `C` is now COMPUTED from `dx` and `fd_order`
-    (`inversion_1d.analytic_tensor_calibration`), so a cfg carrying those is
-    fully calibratable and needs nothing from notebook 02. The old check
-    demanded a fitted calibration and would now reject a perfectly good cfg.
+    failure this module exists to prevent, so this check has to stay. What it
+    accepts is what `inversion_1d.analytic_tensor_calibration` needs: `C` is
+    COMPUTED from `dx` and `fd_order`, so a cfg carrying those is fully
+    calibratable and needs nothing from notebook 02. Demanding a FITTED
+    calibration here would reject a perfectly good cfg.
     """
     if "tensor_calibration" in cfg or "calibration" in cfg:
         return

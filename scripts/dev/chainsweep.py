@@ -96,10 +96,9 @@ def offending_globals(g: dict, fwd_root: Path):
     """Paths that point at a dataset artifact in the forward ROOT.
 
     Checks bare `Path` globals AND the attributes of objects held in globals.
-    The second half is not optional: the notebooks now bind ONE
-    `headless.DatasetPaths` (`DS`) instead of a dozen loose path constants, so
-    a bare-`Path`-only walk would report PASS on a notebook whose every dataset
-    artifact was bound to the root. A check that cannot see the thing it checks
+    The second half is not optional: the notebooks bind ONE
+    `headless.DatasetPaths` (`DS`), so a bare-`Path`-only walk would report
+    PASS on a notebook whose every dataset artifact was bound to the root. A check that cannot see the thing it checks
     is worse than no check, because it reads as evidence.
     """
     bad = []
@@ -123,10 +122,9 @@ def offending_globals(g: dict, fwd_root: Path):
 def _find_donor(fwd: Path):
     """A directory holding a real `setup_metadata.json` to copy the fixture from.
 
-    Once the workshop's own workspace IS an acquisition matrix, the forward root
-    no longer carries one - it holds `manifest.json` and subdirectories. Without
-    this fallback the sweep would quietly SKIP from that point on, and a SKIP
-    reads like a pass.
+    The workspace IS an acquisition matrix, so the forward root itself holds
+    `manifest.json` and subdirectories, not a `setup_metadata.json`. Without
+    this fallback the sweep would quietly SKIP, and a SKIP reads like a pass.
     """
     if (fwd / "setup_metadata.json").exists():
         return fwd

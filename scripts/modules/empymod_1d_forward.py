@@ -1,6 +1,6 @@
 """Empymod 1D layered forward for inversion results.
 
-LEGACY. The workshop's own 1D path no longer uses this module - the 2D FDTD
+LEGACY. The workshop's own 1D path does not use this module - the 2D FDTD
 data comes from a LINE source, which `empymod.dipole` (a 3D point dipole)
 cannot represent without ad-hoc corrections. Notebooks 05/06 use
 `analytic_1d_forward` (rockem-suite's exact 2D line-source solver) instead.
@@ -15,11 +15,11 @@ is the SOURCE (electric 1/2/3 = x/y/z, magnetic 4/5/6 = x/y/z). So
     ab=64  Hz receiver <- Hx source   (NOT 46)
     ab=46  Hx receiver <- Hz source
 
-This module previously had it backwards (`ab_hxhz` defaulted to 46, and
-`ab_with_z_oriented_source` incremented the receiver digit rather than the
-source digit), so its "Hz" channel was really "Hx from a Hz source" and its
-tilt mixing rotated the receiver instead of the source. The error is
-invisible on the diagonal and only flips the SIGN of the cross terms for a
+GETTING THIS BACKWARDS IS NEARLY INVISIBLE, which is why it is spelled out.
+With `ab_hxhz` at 46, or with `ab_with_z_oriented_source` incrementing the
+receiver digit, the "Hz" channel is really "Hx from a Hz source" and the tilt
+mixing rotates the receiver instead of the source. Such an error does not show
+on the diagonal at all, and only flips the SIGN of the cross terms for a
 same-depth inline receiver line; it becomes a real 10-40% discrepancy once
 source and receiver are at different depths.
 
@@ -55,8 +55,8 @@ def ab_with_z_oriented_source(ab_code: int) -> int:
     4/5/6 = x/y/z). So swapping an x-oriented source for a z-oriented one
     is `+2` on the UNITS digit: 44 (Hx<-Hx) -> 46 (Hx<-Hz).
 
-    This used to add 2 to the tens digit, which changes the RECEIVER, not
-    the source - see the module docstring.
+    Adding 2 to the TENS digit instead would change the receiver, not the
+    source - see the module docstring.
     """
     ab = int(ab_code)
     rec_code = ab // 10

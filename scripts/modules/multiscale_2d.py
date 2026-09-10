@@ -1,16 +1,16 @@
-"""Multi-scale 2D FWI: a frequency ladder over the per-frequency grids of Task 2.
+"""Multi-scale 2D FWI: a frequency ladder over the workshop's per-frequency grids.
 
-Once Task 2 splits the modelling by frequency, the inversion HAS to follow: each
-frequency owns a dataset recorded on its own grid with its own dx and dt, so a
-single inversion consuming the whole band no longer has one coherent set of
-inputs. This module turns that necessity into the better-conditioned approach -
+The modelling is split by frequency, so the inversion HAS to follow: each
+frequency owns a dataset recorded on its own grid with its own dx and dt, and a
+single inversion consuming the whole band has no coherent set of inputs to
+consume. This module turns that necessity into the better-conditioned approach -
 an outer loop over frequency, lowest first, each stage initialised from the
 previous stage's model.
 
 What a stage is
 ---------------
-Stage k inverts the dataset for frequency f_k, ON THE GRID Task 2 designed for
-f_k, with `inv.cfg` values matched to that stage:
+Stage k inverts the dataset for frequency f_k, ON THAT FREQUENCY'S OWN GRID,
+with `inv.cfg` values matched to that stage:
 
 * `order` and `lpml` copied from that frequency's forward `mod.cfg` (this is
   what `prepare_inversion_inputs` already does - a mismatch would make the FWI's
@@ -22,12 +22,12 @@ f_k, with `inv.cfg` values matched to that stage:
   depth, so early stages solve for genuinely fewer, larger-scale parameters;
 * `tik_sgregalpha` / `tv_sgregalpha` scheduled to relax as frequency rises.
 
-Stage 1 starts from whatever `create_initial_sg0_model` produces today.
+Stage 1 starts from whatever `create_initial_sg0_model` produces.
 
 The grid handoff
 ----------------
-This is the new structural piece and the one most likely to be got wrong: stage
-k's output lives on stage k's grid and stage k+1 needs it on a finer one.
+This is the structural piece most likely to be got wrong: stage k's output
+lives on stage k's grid and stage k+1 needs it on a finer one.
 
 `resample_model_log_rho` interpolates in **log resistivity** - not in
 conductivity and not in resistivity - so that a smooth coarse model does not
@@ -58,8 +58,8 @@ would put unphysical resistivities into the next stage's starting model.
 Per-stage weighting, uncertainties and aperture
 -----------------------------------------------
 `inversion.create_weight_file_from_hx` builds a Hann taper of length `nt` from
-THAT stage's own `Hx_data.rss`, so it is already correct per stage without
-change: each per-frequency run has its own record length (`rec_time =
+THAT stage's own `Hx_data.rss`, so it is correct per stage with no extra
+work: each per-frequency run has its own record length (`rec_time =
 n_periods / f`, so the high-frequency records are shorter), and the weight file
 inherits it. The taper also happens to suppress the source ramp-up at the start
 of the record, which is the same transient `n_periods_extract` has to avoid on
@@ -288,11 +288,11 @@ def build_ladder(
 ) -> list[Stage]:
     """Stages, lowest frequency first, plus an optional final joint stage.
 
-    The design decision the task asks to make DELIBERATELY: whether stage k uses
-    only f_k, or all frequencies up to and including f_k. The cumulative form is
-    the more robust textbook choice, but it conflicts with Task 2 - frequencies
-    below f_k live on COARSER grids, so a cumulative stage has to run on the
-    finest grid of its set and gives back part of the modelling saving.
+    The design decision to make DELIBERATELY: whether stage k uses only f_k, or
+    all frequencies up to and including f_k. The cumulative form is the more
+    robust textbook choice, but it conflicts with per-frequency grids -
+    frequencies below f_k live on COARSER ones, so a cumulative stage has to run
+    on the finest grid of its set and gives back part of the modelling saving.
 
     The compromise implemented here is a strictly SEQUENTIAL ladder (each stage
     on its own grid, cheap, doing its classical job of producing a good starting

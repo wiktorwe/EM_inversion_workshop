@@ -127,8 +127,8 @@ This folder is the module-oriented script codebase used by the GUI notebooks
 
 - `survey.cfg`: survey template copied to a temp workspace.
 - `mod.cfg`: 2D forward-modelling config template (explicit TE2D engine).
-- `mod3d.cfg`: 3D forward-modelling config template (legacy ADI path -
-  unvalidated by the 2D redesign, see `02_fwmodelling_and_data_visualization`'s markdown).
+- `mod3d.cfg`: 3D forward-modelling config template (ADI path - unvalidated,
+  see `KNOWN_ISSUES.md` section 7).
 - `inv.cfg`: 2D inversion config template (explicit TE2D engine).
 - `runmod.sh` / `runinv.sh`: run scripts invoking the explicit TE2D engine at
   `$ROCKEM_SUITE_ROOT/bin` (CPU: `mpiEmmodTE2d` / `mpiEminvTE2d`; GPU:

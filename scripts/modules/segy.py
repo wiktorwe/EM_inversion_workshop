@@ -228,8 +228,9 @@ def pad_resistivity_for_depth_margin(resistivity, oz, dz, source_z_m, min_domain
     <1% at 55 m of clearance to ~55% at 20 m, for `EM_inversion_workshop`'s
     own survey geometry - see the rockem-suite skill's gotchas). This is
     the depth-direction analogue of `design_explicit_fd`'s `apertx` margin,
-    which the workshop already applies in x; nothing analogous previously
-    existed for z, since z-extent came from whatever the SEG-Y file covered.
+    which the workshop applies in x. It has to be applied explicitly, because
+    the z-extent otherwise comes from whatever the SEG-Y file happens to
+    cover.
 
     Assumes `dz > 0` (depth increasing with sample index, the standard
     SEG-Y/rockseis convention `read_resistivity_from_segy` returns).
@@ -300,10 +301,10 @@ def write_sg_ep_rss(
     is two INDEPENDENT optional ratios - `Aep = eps_h/eps_v` and
     `Asg = sigma_h/sigma_v` - and an omitted key (or empty filename)
     synthesises an all-ones array inside the engine, so an isotropic model
-    ships no anisotropy file at all. This function used to emit a ones-valued
-    `an.rss` for the retired single `A` key, which current rockem-suite
-    REJECTS with a fatal error rather than ignoring. The workshop is isotropic,
-    so the correct fix is to write nothing. Note if you ever add one: `Asg` is
+    ships no anisotropy file at all. A ones-valued `an.rss` under the single
+    `A` key is not a harmless no-op: rockem-suite REJECTS that key with a fatal
+    error rather than ignoring it. The workshop is isotropic, so it writes
+    nothing. Note if you ever add one: `Asg` is
     a CONDUCTIVITY ratio, the reciprocal of the geophysical coefficient of
     anisotropy rho_h/rho_v - the easiest thing here to get upside down coming
     from a resistivity workflow.

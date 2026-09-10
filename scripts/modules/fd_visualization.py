@@ -1,14 +1,13 @@
 """FD output loading and amplitude/phase extraction helpers.
 
-Extraction used to time-differentiate Hx/Hz (`np.gradient`) and pick the
-nearest FFT bin with an ad-hoc `|X|/(nt/4)` normalization
-(`estimate_fft`/`compute_amp_phase_for_component`) - both deleted. Replaced
-with the validated `steady_state_phasor` channel-gain-ratio pattern from
-rockem-suite's own validation examples (`doc/examples/*/shared/phasor.py`,
-via `scripts.modules.rockem_bridge`): apply the SAME Hanning-windowed
-phasor extractor to the recorded trace AND the injected wavelet, take the
-ratio. Any convention-dependent scale/window normalization cancels out of
-that ratio - no time-derivative, no phase correction constants needed.
+Extraction follows the validated `steady_state_phasor` channel-gain-ratio
+pattern from rockem-suite's own validation examples
+(`doc/examples/*/shared/phasor.py`, via `scripts.modules.rockem_bridge`):
+apply the SAME Hanning-windowed phasor extractor to the recorded trace AND
+the injected wavelet, then take the ratio. Any convention-dependent
+scale/window normalization cancels out of that ratio, so nothing here needs
+a time-derivative of the trace, a nearest-FFT-bin pick, or a phase
+correction constant - each of which would be a convention to get right.
 """
 
 from __future__ import annotations
@@ -303,13 +302,12 @@ def view_combinations(datasets):
 
     THIS IS THE VIEW AXIS. Step 01 writes one dataset per (frequency, source)
     pair, so a dataset IS a frequency and a source; both receiver components are
-    recorded by every run. The plot GUIs used to offer a `dataset` dropdown AND
-    a `frequency` dropdown AND a `component` dropdown, filling the frequency one
-    from the selected dataset's `flist_hz` - which on a matrix is a SINGLE tone,
-    so that control could only ever show one option and could never reach
-    another tone (it lives in a different directory, modelled with a different
-    source). The source axis was not reachable at all. One list over the real
-    product replaces all three.
+    recorded by every run. Separate `dataset`, `frequency` and `component`
+    dropdowns cannot express that: a frequency control filled from the selected
+    dataset's `flist_hz` has a SINGLE tone to offer on a matrix, so it can never
+    reach another tone (that one lives in a different directory, modelled with a
+    different source), and the source axis is not reachable at all. One list
+    over the real product replaces all three.
 
     Ordered by frequency, then source, then receiver, so stepping through it
     walks the tensor tone by tone.

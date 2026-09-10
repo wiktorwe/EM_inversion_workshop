@@ -1,14 +1,14 @@
 """Bridge to the validated `rockem-suite` checkout.
 
-The workshop used to point at a stale, pre-fix checkout
-(`~/software/rockem-suite`) and reconcile 2D line-source FDTD data against
-`empymod`'s 3D point-dipole solution via a stack of ad-hoc correction
-constants. Neither is still true: the current, validated suite lives at
-`~/software/new_rockem/rockem-suite` (explicit TE2D passes the layered-model
-Green's-function check; ADI TE2D does not - see that repo's
-`doc/examples/validate_layered_1d_model/README.md`), and its own
-`rockem.greens.greens_layered_2d` gives the *exact* 2D line-source answer
-directly, no empymod, no correction constants.
+THE CHECKOUT THIS WORKSHOP NEEDS is the validated one at
+`~/software/new_rockem/rockem-suite` - explicit TE2D passes the layered-model
+Green's-function check there, ADI TE2D does not (see that repo's
+`doc/examples/validate_layered_1d_model/README.md`). `~/software/rockem-suite`
+is a different, unfixed checkout, and pointing at it is not a version
+inconvenience: its `rockem.greens.greens_layered_2d` is what gives the *exact*
+2D line-source answer directly, and without it the only 1D reference available
+is `empymod`'s 3D point dipole reconciled through a stack of ad-hoc correction
+constants.
 
 This module is the single place that locates that checkout, puts its
 `python/` package and the validation examples' `shared/` directory on
@@ -16,12 +16,10 @@ This module is the single place that locates that checkout, puts its
 `scripts.modules.rockem_bridge` before anything that needs `rockem.*` or
 the analytic line-source solvers.
 
-The Green's solvers used to live in
-`doc/examples/validate_layered_1d_model/shared/greens_layered_2d.py` and
-were imported off `sys.path`; as of rockem-suite 6723d49 they are package
-code (`rockem.greens`) and the old example-local files are deleted. The
-`shared/` directory is still on `sys.path` because `phasor.py` (used by
-`fd_visualization`) did NOT move.
+The Green's solvers are package code (`rockem.greens`), imported as such.
+`doc/examples/validate_layered_1d_model/shared/` stays on `sys.path` anyway,
+because `phasor.py` (used by `fd_visualization`) lives only there and has no
+package home.
 """
 
 from __future__ import annotations

@@ -5,14 +5,15 @@ depth, against FDTD data whose interfaces are quantised onto the FD grid. `C(f)`
 cannot absorb that error: `C` is one complex number per frequency, shared by
 every transmitter, whereas this error is model- and depth-dependent.
 
-`sg.rss` used to be resampled from the SEG-Y model with LINEAR interpolation,
-which made every interface a ONE-CELL RAMP whose effective depth is the ramp
-midpoint - a depth that sits between cell faces and is not bounded by half a
-cell in any tidy way. Snapping the inversion's candidate interfaces to the grid
-could therefore only ever be a partial fix. The resampling is now NEAREST
-(`headless.build_forward_inputs`, and notebook 01's `on_apply_outputs`), so an
-interface is a genuine step and its effective depth is the midpoint of the two
-samples straddling it - i.e. exactly `oz + (k + 1/2) * dz`.
+`sg.rss` is resampled from the SEG-Y model with NEAREST interpolation
+(`headless.build_forward_inputs`, and notebook 01's `on_apply_outputs`), which
+is what makes an interface a genuine step: its effective depth is the midpoint
+of the two samples straddling it - i.e. exactly `oz + (k + 1/2) * dz`, so the
+quantisation error is bounded by half a cell. LINEAR interpolation would make
+every interface a ONE-CELL RAMP whose effective depth is the ramp midpoint, a
+depth that sits between cell faces with no such bound, and snapping the
+inversion's candidate interfaces to the grid could then only ever be a partial
+fix.
 
 This script measures, PER DATASET of the acquisition matrix (each has its own
 grid, so each quantises differently):

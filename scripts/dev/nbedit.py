@@ -10,7 +10,7 @@ Usage:
     python scripts/dev/nbedit.py <notebook.ipynb> <edits.json>
 
 ``edits.json`` is a list of ``{"old": ..., "new": ..., "count": n}`` objects
-applied in order to whichever code cell contains ``old``. ``count`` defaults to
+applied in order to whichever cell contains ``old``, code or markdown. ``count`` defaults to
 1 and is enforced: a replacement that does not fire exactly ``count`` times is
 an error, so a stale edit fails loudly instead of silently doing nothing.
 """

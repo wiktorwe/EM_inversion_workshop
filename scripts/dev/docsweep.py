@@ -1,39 +1,37 @@
 #!/usr/bin/env python3
 """Does the PROSE still describe code that exists?
 
-The bug class this exists to catch, in full:
+The bug class this exists to catch: the code moves and the prose does not.
+A panel can describe a contract the code dropped, the README can repeat it, and
+a comment can name a function nobody defines any more - while every other sweep
+PASSES, because they check undefined NAMES, cell EXECUTION, handler EXCEPTIONS
+and PATH binding. None of them can see a sentence that is false, so "4/4 PASS"
+is not evidence the application works.
 
-    C(f) stopped being read from `setup_metadata.json` - Steps 05/06 compute it.
-    The code changed. Notebook 02's panel still said "the last successful
-    calibration overwrites setup_metadata.json for notebooks 05/06", the README
-    said the same, and a comment still pointed at `require_global_calibration`,
-    a function that no longer existed.
-
-    All four existing sweeps PASSED throughout. They check undefined NAMES,
-    cell EXECUTION, handler EXCEPTIONS and PATH binding. None of them can see a
-    sentence that has become false, so "4/4 PASS" was not evidence the
-    application worked - and it was read as if it were.
-
-Two checks:
+Three checks:
 
 1. DEAD SYMBOLS - any identifier mentioned in prose, in backticks, that does not
    exist anywhere in the code.
 2. TEMPORAL WORDS IN GUI TEXT - "now", "no longer", "used to", "instead of" and
    friends, in anything a USER sees: markdown cells, `ipw.HTML`, `push_message`,
    widget `description=`. GUI text says what a control does and how to use it;
-   it is not a changelog, and a user has no idea what it used to say. Rationale
-   and history belong in code comments, limitations in `KNOWN_ISSUES.md`,
+   it is not a changelog, and the reader has no idea what any other version
+   said. Rationale belongs in code comments, limitations in `KNOWN_ISSUES.md`,
    parameter detail in `doc/gui_manual.tex`. See RULE 5 in the project skill.
+3. SECTIONS MISSING FROM THE INTRO - a notebook section that the notebook's own
+   intro cell never mentions. A purpose statement that is true but describes
+   half the notebook is invisible to checks 1 and 2, and it is the first thing
+   a user reads.
 
 Prose means: markdown cells, `#` comments, docstrings, .md files, and the HTML
 strings the notebooks display to the user - the last being where this repo's
 stale claims actually live.
 
-HISTORICAL MENTIONS ARE FINE and this repo is full of them on purpose ("this
-used to be `require_global_calibration`, which RAISED"). A mention is treated as
-historical when a past-tense marker appears in the same sentence. That heuristic
-is deliberately generous: the goal is to catch the claim that is still being
-made in the present tense, not to police the changelog.
+A backticked symbol is exempted from check 1 when a past-tense marker appears
+in the same sentence: `KNOWN_ISSUES.md` and the design notes have to be able to
+name something that is gone, and naming it is not the same as claiming it
+exists. The heuristic is deliberately generous - the target is the claim still
+being made in the present tense.
 """
 from __future__ import annotations
 
@@ -96,10 +94,10 @@ def code_tokens() -> set[str]:
                 if tok.type == tokenize.COMMENT:
                     continue                      # comments are PROSE
                 if tok.type == tokenize.STRING:
-                    # DOCSTRINGS ARE PROSE TOO. Counting them as code is what
-                    # made the first version of this check useless: a symbol
-                    # mentioned only in its own "this used to be X" docstring
-                    # looked defined, so the check passed on a poisoned tree.
+                    # DOCSTRINGS ARE PROSE TOO. Counting them as code defeats
+                    # the check: a symbol named only in the docstring that
+                    # discusses it would look defined, and the sweep would pass
+                    # on a poisoned tree.
                     # Triple-quoted or long => prose; short literals stay, since
                     # prose legitimately references string VALUES.
                     body = tok.string.lstrip('rbfuRBFU')
@@ -186,6 +184,51 @@ def gui_strings():
                             yield f"{p.name} cell {ci} (widget label)", k.value.value
 
 
+# Words too generic to prove that an intro mentions a section: every notebook
+# runs, loads and computes something.
+GENERIC = {
+    "run", "runs", "load", "loads", "compute", "computes", "show", "shows",
+    "the", "and", "for", "all", "with", "from", "this", "that", "step",
+    "steps", "into", "onto", "each", "its", "own", "set", "sets", "get",
+    "gets", "make", "makes", "use", "uses", "view", "views", "data",
+}
+
+
+def section_headings(nb: dict):
+    """The numbered section titles a notebook renders, e.g. `3b) Validate ...`."""
+    out = []
+    for c in nb["cells"]:
+        text = "".join(c["source"])
+        for m in re.finditer(r"<h[23][^>]*>\s*(\d+[a-z]?\)\s*[^<]+)</h[23]>", text):
+            out.append(re.sub(r"\s+", " ", m.group(1)).strip())
+    return out
+
+
+def uncovered_sections():
+    """Sections the notebook's intro cell does not mention.
+
+    The intro is the only place that says what the whole step is for, and a
+    reader decides from it whether this is the notebook they want. An intro
+    that describes two of five sections is not false, so neither the dead-symbol
+    check nor the temporal-word check can see it - but it is still wrong.
+
+    A section counts as mentioned when one of its distinctive words appears in
+    the intro, matched on a six-character stem so `Visualization` covers
+    `visualising`. Generic verbs are not distinctive; `channel-gain` is.
+    """
+    for p in sorted(ROOT.glob("*.ipynb")):
+        nb = json.loads(p.read_text())
+        intro = next(("".join(c["source"]) for c in nb["cells"]
+                      if c["cell_type"] == "markdown"), "")
+        stems = {w[:6] for w in re.findall(r"[A-Za-z]{3,}", intro.lower())}
+        for head in section_headings(nb):
+            title = head.split(")", 1)[1]
+            words = [w for w in re.findall(r"[A-Za-z]{4,}", title.lower())
+                     if w not in GENERIC]
+            if words and not any(w[:6] in stems for w in words):
+                yield p.name, head
+
+
 def main() -> int:
     known = code_tokens()
     bad: list[str] = []
@@ -218,6 +261,9 @@ def main() -> int:
             seen.add(b)
             uniq.append(b)
 
+    unsaid = [f'{nb}: the intro cell does not mention "{head}"'
+              for nb, head in uncovered_sections()]
+
     timeless = []
     for where, text in gui_strings():
         m = TEMPORAL.search(text)
@@ -229,12 +275,16 @@ def main() -> int:
         print("STALE " + b)
     for t in dict.fromkeys(timeless):
         print("TEMPORAL " + t)
-    n_bad = len(uniq) + len(dict.fromkeys(timeless))
+    for u in unsaid:
+        print("UNSAID " + u)
+    n_bad = len(uniq) + len(dict.fromkeys(timeless)) + len(unsaid)
     if not n_bad:
-        print("\nRESULT: PASS - prose matches the code, and GUI text is timeless")
+        print("\nRESULT: PASS - prose matches the code, GUI text is timeless, "
+              "every section is in its notebook's intro")
     else:
         print(f"\nRESULT: {len(uniq)} stale reference(s), "
-              f"{len(dict.fromkeys(timeless))} temporal word(s) in GUI text")
+              f"{len(dict.fromkeys(timeless))} temporal word(s) in GUI text, "
+              f"{len(unsaid)} unmentioned section(s)")
     return 1 if n_bad else 0
 
 

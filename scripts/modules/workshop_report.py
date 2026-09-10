@@ -1145,12 +1145,12 @@ def build_report(
 ) -> dict[str, Any]:
     """Build the workflow report for ONE forward dataset.
 
-    `dataset` names one entry of the acquisition matrix (`manifest.json`). The
-    report used to read `cfg.fwd_2d_dir/setup_metadata.json` unconditionally,
-    which on a matrix workspace is not a dataset at all - the datasets live in
-    subdirectories - so it reported whichever file it happened to find, or
-    failed. With a matrix present and no `dataset` given it takes the first and
-    records which, so the report always says what it is about. Figures and the
+    `dataset` names one entry of the acquisition matrix (`manifest.json`).
+    `cfg.fwd_2d_dir/setup_metadata.json` is NOT a dataset on a matrix workspace
+    - the datasets live in subdirectories - so a report that reads the forward
+    root describes whichever file it happens to find, or nothing. With a matrix
+    present and no `dataset` given this takes the first and records which, so
+    the report always says what it is about. Figures and the
     .tex go to `report/<dataset>/` whenever a matrix exists, so building every
     dataset does not have them overwrite each other.
     """

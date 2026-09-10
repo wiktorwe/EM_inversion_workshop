@@ -37,10 +37,10 @@ NEEDS_ROCKEM = {
 def _code_cells(nb_path: Path) -> str:
     """EVERY code cell, concatenated, in order.
 
-    This used to return only the FIRST code cell. Notebook 04 has two - a setup
-    cell and a 959-line GUI cell - so more than half of it was never validated
-    at all, and a NameError in the GUI cell would only ever surface in front of
-    a user. Voila runs all of them, so validation must too.
+    Voila runs all of them, so validation must too. Notebook 04 has two - a
+    setup cell and a 959-line GUI cell - so taking only the first would leave
+    more than half of it unchecked, and a NameError in the GUI cell would
+    surface only in front of a user.
     """
     nb = json.loads(nb_path.read_text())
     cells = ["".join(c.get("source", []))

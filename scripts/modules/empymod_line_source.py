@@ -133,10 +133,10 @@ def empymod_line_yintegral(
 # So a Kx line source is read as (44, 64) = (Hx<-Kx, Hz<-Kx), and a Kz one as
 # (46, 66) = (Hx<-Kz, Hz<-Kz).
 #
-# Only the Kx pair used to exist here, and `forward_1d_gains` called this
-# function positionally without passing its `source_field` through. The result
-# was not a failure but a SUBSTITUTION: a rejected Kz solve fell back to the Kx
-# response and returned it as if it were Kz, with only the generic
+# BOTH pairs must be listed, and `forward_1d_gains` must pass its
+# `source_field` through rather than calling this positionally. A missing entry
+# is not a failure but a SUBSTITUTION: a rejected Kz solve falls back to the Kx
+# response and returns it as if it were Kz, under the generic
 # "used empymod line-source fallback" warning, which does not name the source.
 _AB_FOR_SOURCE = {
     "HX": (44, 64),

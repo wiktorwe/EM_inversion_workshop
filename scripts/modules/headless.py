@@ -906,16 +906,15 @@ class DatasetPaths:
     THE PATH-BINDING CONTRACT, in one place. On an acquisition-matrix workspace
     the forward ROOT holds only `manifest.json` and one subdirectory per
     dataset, so none of these files exists at the root - they all belong to a
-    dataset. Notebooks 02/03/04/05/06 each used to re-join them by hand and
-    rebind them through a per-notebook `global` list inside `_select_dataset`.
-    That list was hand-maintained, and forgetting to extend it is exactly how
-    `SETUP_META = <forward root>/setup_metadata.json` shipped and killed Step
-    05's lambda tuner in front of a user. A second instance (`SG_TRUE_PATH`)
-    survived the fix and was only found when `chainsweep.py` was written; a
-    third (`FDMODEL_DATA_DIR` in notebook 05) was never rebound at all.
+    dataset. A notebook holds a single `DS` and reads `DS.setup_meta`, `DS.hx`,
+    ... - selecting a dataset rebinds every path at once.
 
-    So there is one mechanism now: a notebook holds a single `DS` and reads
-    `DS.setup_meta`, `DS.hx`, ... There is no per-notebook list to forget.
+    THE ALTERNATIVE IS A LIST NOBODY CAN MAINTAIN. Notebooks 02/03/04/05/06 each
+    re-joining these paths by hand and rebinding them through their own `global`
+    list inside `_select_dataset` puts one hand-written name per path between
+    the selection and the file. A path left off that list keeps pointing at the
+    forward root, where nothing exists, and stays silent until some handler
+    opens it - which is why the sweep below exists.
 
     `chainsweep.py` walks the attributes of objects like this one, not just
     bare `Path` globals - keep it that way or the invariant stops being tested.

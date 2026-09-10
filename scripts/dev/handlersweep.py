@@ -42,8 +42,11 @@ def _cheap_tune_de(cfg, tx_entry, **kw):
 
 
 def _cheap_tune_lambda(cfg, tx_entry, **kw):
+    # The lambda sweep runs one full DE inversion PER LAMBDA at the cfg's own
+    # popsize/maxiter, so bounding the lambda list alone left it at 24.6 s -
+    # 82 % of this entire sweep. The budget has to be cut too.
     kw.update(lambdas=(0.0, 500.0), n_jobs=1)
-    return _real_tune_lambda(cfg, tx_entry, **kw)
+    return _real_tune_lambda(dict(cfg, popsize=4, maxiter=1), tx_entry, **kw)
 
 
 _tuning.tune_de_budget = _cheap_tune_de

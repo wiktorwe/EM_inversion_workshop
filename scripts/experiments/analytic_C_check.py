@@ -1,9 +1,9 @@
 """Does the COMPUTED C(f) match the one an FDTD calibration fits?
 
-This is the falsification test for `scripts/modules/fd_error_model.py`. `C` is
-no longer fitted in the production path - it is `dx*dz*s(order)`, derived from
-how the engine injects a source into one cell. That derivation is either right
-or it is not, and this is what decides.
+This is the falsification test for `scripts/modules/fd_error_model.py`. The
+production path COMPUTES `C` as `dx*dz*s(order)`, derived from how the engine
+injects a source into one cell. That derivation is either right or it is not,
+and this is what decides.
 
     python scripts/experiments/analytic_C_check.py
 

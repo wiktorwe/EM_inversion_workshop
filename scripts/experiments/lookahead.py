@@ -1,14 +1,14 @@
 """How far ahead of the fault can each magnetic coupling actually see?
 
-This is the re-run of `fault_couplings.stage_fault` after its first attempt
-measured the MODELLING APERTURE instead of the physics (see the APERTURE note in
-`fault_couplings.py`). Three things change:
+This measures what `fault_couplings.stage_fault` cannot: staged at survey
+scale, that experiment measures the MODELLING APERTURE, not the physics (see the
+APERTURE note in `fault_couplings.py`). Three things differ here:
 
 1. **apertx is sized from the look-ahead range, not the survey offsets.**
    `apertx > 0` is a source-centred TOTAL width, so a fault further than
    `apertx/2` from a transmitter is not in that shot's local model at all. The
-   default 110.6 m gives a 55.3 m half-width, and the first run's observables
-   were bit-identical at every transmitter beyond it.
+   default 110.6 m gives a 55.3 m half-width, and the observables are
+   bit-identical at every transmitter beyond it.
 
 2. **The transmitter line is extended** well past the intended detection range,
    so there are transmitters that genuinely see nothing and can serve as

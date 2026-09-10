@@ -5,12 +5,12 @@ entirely.
 
 Why this replaces empymod here: the workshop's 2D FDTD data comes from a
 `Jy`/`Kx`-invariant LINE source (`WavesEmTE2D`), not a 3D point dipole -
-empymod has no native line-source mode. The old code got a "1D reference"
-by calling `empymod.dipole` directly and then papering over the resulting
-2D-vs-3D mismatch with ad-hoc corrections (a flat -180 degree phase
-constant, a sqrt(offset) amplitude "spreading" factor, a forced
-time-derivative on the FDTD side) - see the git history this workshop
-inherited. `magnetic_line_source_fields_layered` (rockem-suite,
+empymod has no native line-source mode. Reaching a "1D reference" through
+`empymod.dipole` therefore costs a stack of ad-hoc corrections for the
+2D-vs-3D mismatch (a flat -180 degree phase constant, a sqrt(offset)
+amplitude "spreading" factor, a forced time-derivative on the FDTD side),
+each of which has to be right for the answer to mean anything.
+`magnetic_line_source_fields_layered` (rockem-suite,
 `rockem.greens.greens_layered_2d`) gives
 the EXACT 2D line-source answer for a 1D layered earth directly, with no
 correction constants: it is the analytic counterpart of a `WavesEmTE2D`
@@ -158,8 +158,8 @@ def layers_from_rho_thk(rho: np.ndarray, thickness: np.ndarray, eps_r: float) ->
     `eps_r` is ONE SCALAR here, deliberately: a layer stack belongs to a single
     frequency. On an acquisition matrix `eps_r` is per frequency, and the caller
     builds one stack per frequency - `forward_1d_gains` does this through its
-    `layers_at` cache. Passing the whole per-frequency array here is a
-    `TypeError`, which is exactly how Step 05's convergence check used to die.
+    `layers_at` cache. Passing the whole per-frequency array here raises
+    `TypeError` rather than silently modelling one permittivity for the band.
     """
     rho = np.asarray(rho, dtype=float).reshape(-1)
     thickness = np.asarray(thickness, dtype=float).reshape(-1)
@@ -271,9 +271,9 @@ def forward_1d_gains(
     ``source_field`` selects which magnetic line source is modelled: ``"HX"``
     (Kx, the TE2D engine's ``source_type=3``) or ``"HZ"`` (Kz,
     ``source_type=5``). It MUST match the source that produced the data being
-    fitted. This used to be hardcoded to Kx, so feeding it Kz data modelled the
-    wrong source silently - the same class of error as an inversion cfg whose
-    ``source_type`` does not match its shot gather, but with no cfg to inspect.
+    fitted: a mismatch models the wrong source silently - the same class of error
+    as an inversion cfg whose ``source_type`` does not match its shot gather,
+    but with no cfg to inspect.
 
     `rx_depth_m` may be a SCALAR (all receivers at one depth) or a PER-RECEIVER
     array matching `off_x`, exactly like `fdtd_analytic_calibration`'s
@@ -293,7 +293,7 @@ def forward_1d_gains(
     FD interface depth genuinely DIFFERS between tones (measured 6020.1 /
     6020.875 / 6020.8 m for the same true interface at 6020.5 m). One snap grid
     for a joint fit would therefore be right for one tone and wrong for the
-    others. Leave them `None` to fit continuous depths, as before.
+    others. Leave them `None` to fit continuous depths.
 
     `lam_max` overrides the solver's kx-truncation limit (default `None` =
     `_default_lam_max`, sized off the model's MOST conductive layer). It is
@@ -319,9 +319,8 @@ def forward_1d_gains(
     SAME-DEPTH RECEIVERS ARE FINE. The solver splits the primary (closed
     form, in the source layer's own whole space) from the secondary
     (quadrature), so `rx_depth_m == tx_depth_m` - this workshop's own
-    default `gz0 == sz0` - evaluates correctly. The old "needs >= ~0.15
-    skin depths of depth offset" restriction applied to the pre-
-    decomposition solver and no longer exists.
+    default `gz0 == sz0` - evaluates correctly. No minimum depth offset
+    applies.
 
     What DOES still raise `ForwardRejected`, all via `GreensSolverError`:
     - a receiver at the source point (`offset ~ 0` AND same depth) - the
@@ -399,8 +398,8 @@ def forward_1d_gains(
                          "interface depths is oz + (k+1/2)*dz, and without its "
                          "origin the snap would be to an arbitrary lattice.")
 
-    # Keyed on (eps_r, snap_dz, snap_origin_m): the layer STACK, not just the
-    # permittivity, now varies per frequency when snapping is on.
+    # Keyed on (eps_r, snap_dz, snap_origin_m): with snapping on it is the
+    # layer STACK, not just the permittivity, that varies per frequency.
     _layer_cache: Dict[tuple, List[Layer1D]] = {}
 
     def thk_at(ifreq: int):
@@ -409,8 +408,8 @@ def forward_1d_gains(
         Snapping makes the stack itself frequency-dependent, so every consumer
         must ask for the right one - including the empymod fallback, which would
         otherwise model the unsnapped stack while the main path modelled the
-        snapped one. That is the same shape of bug as the `source_field` the
-        fallback used to ignore.
+        snapped one, a silent mismatch of the same class as modelling the wrong
+        `source_field`.
         """
         dz_value, org_value = snap_arr[ifreq], org_arr[ifreq]
         if np.isfinite(dz_value) and np.isfinite(org_value):
@@ -536,9 +535,9 @@ def check_kx_convergence(
       exactly this kind on a 13x-contrast stack, and its own self-check calls
       lam_max-doubling "the decisive signal - n_nodes-doubling alone is blind".
 
-    This function therefore runs BOTH legs. An earlier version doubled only
-    `n_nodes`, which made it structurally incapable of detecting the very error
-    it was written to guard against.
+    This function therefore runs BOTH legs. An `n_nodes`-only check is
+    structurally incapable of detecting truncation, the more dangerous of the
+    two, so neither leg is optional.
 
     Both Hx and Hz are compared, each normalised by its OWN row scale rather
     than pointwise: Hz is odd in offset and passes through zero, so a pointwise
@@ -548,32 +547,30 @@ def check_kx_convergence(
 
     Run this once before trusting an inversion over a new or wider prior.
 
-    ON `rel_tol`, because the default changed and a wrong threshold makes this
-    check worse than useless in EITHER direction. The inherited default was
-    1e-4, which suited the old n_nodes-only test - that leg returns ~1e-10, so
-    it passed unconditionally and told you nothing. The lam_max leg legitimately
-    sits near 1e-3 (measured 1.4e-3 over this workshop's own prior at the
-    shipped quadrature policy), so carrying 1e-4 over to it made the check FAIL
-    unconditionally instead, which is equally uninformative.
+    ON `rel_tol`, because a wrong threshold makes this check worse than useless
+    in EITHER direction. The two legs live on completely different scales: the
+    `n_nodes` leg returns ~1e-10, so anything looser than that passes it
+    unconditionally, while the `lam_max` leg legitimately sits near 1e-3
+    (measured 1.4e-3 over this workshop's own prior at the shipped quadrature
+    policy), so anything tighter fails it unconditionally. A single threshold
+    has to clear the second without being meaningless for the first.
 
-    The threshold is now anchored to the workshop's own uncertainty floor:
+    It is anchored to the workshop's own uncertainty floor:
     `fdtd_analytic_calibration.VALIDATED_REL_ERROR_FLOOR` is 3 % of |FDTD|, and
     a forward-model error is harmless when it is well inside that. `rel_tol`
     defaults to a TENTH of the floor (0.3 %), so the shipped configuration
     reports converged with real margin, while a prior wide enough to matter
-    still trips it. The verdict is reported at three levels rather than two, so
-    "inside the noise floor but not negligible" is visible instead of being
-    rounded to pass or fail.
+    still trips it. The verdict has THREE levels, so "inside the noise floor but
+    not negligible" is visible instead of being rounded to pass or fail.
     """
     from scripts.modules.rockem_bridge import magnetic_line_source_fields_layered as _solver
     from rockem.greens.greens_layered_2d import _default_lam_max
 
     # `eps_r` may be a scalar or one value PER FREQUENCY, exactly as
-    # `forward_1d_gains` accepts it. Only the `lam0` leg below ever needed a
-    # scalar, and it took one by calling `layers_from_rho_thk(rho, thk, eps_r)`
-    # once - a TypeError on a matrix workspace. `lam_max` is sized off the
-    # model's most conductive layer AT a frequency, so the honest fix is one
-    # stack per frequency with that frequency's own permittivity.
+    # `forward_1d_gains` accepts it. `lam_max` is sized off the model's most
+    # conductive layer AT a frequency, so the `lam0` leg below needs one stack
+    # per frequency carrying that frequency's own permittivity - handing
+    # `layers_from_rho_thk` the whole array is a TypeError.
     freq_arr = np.asarray(freqs_hz, dtype=float).reshape(-1)
     eps_arr = np.asarray(eps_r, dtype=float).reshape(-1)
     if eps_arr.size == 1:

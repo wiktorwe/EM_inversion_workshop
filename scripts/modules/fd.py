@@ -1,11 +1,10 @@
 """FD-design and config helpers for workshop workflows.
 
-The FD design used to target the ADI TE2D engine at 10x the explicit CFL
-limit (`k_cfl=10` in the old `recommend_dt_from_grid`) - the suite's own
-`validate_layered_1d_model` shows ADI TE2D fails the layered Green's-
-function check (HZ ~178% error) where the explicit engine passes (~1-4%),
-so this workshop now targets the **explicit** engine exclusively
-(`mpiEmmodTE2d`/`mpiEminvTE2d`). `design_explicit_fd` sizes `dt` via
+This workshop targets the **explicit** engine exclusively
+(`mpiEmmodTE2d`/`mpiEminvTE2d`): the suite's own `validate_layered_1d_model`
+shows ADI TE2D failing the layered Green's-function check (HZ ~178% error)
+where the explicit engine passes (~1-4%), so the 10x-CFL time step ADI
+allows buys nothing here. `design_explicit_fd` sizes `dt` via
 `rockem.utils.suggest_time_steps` -> `explicit_em_cfl_dt` (order-aware,
 sigma-independent Yee CFL enforced by ModellingEm*/FwiEm*::checkStability)
 plus PML helpers from `rockem.utils` - see `scripts.modules.rockem_bridge`.

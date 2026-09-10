@@ -6,11 +6,11 @@ stored production survey: 30 transmitters at z = 6050 m along a horizontal well,
 two colinear receivers at -13.1 / -25.3 m, `examples/Fault_1.sgy`, FD order 6.
 Three tones x two sources = six datasets.
 
-Why this exists: `sg.rss`/`ep.rss` are now resampled with `method="nearest"`
-instead of `"linear"`, so every model on disk built before that change has
-one-cell interface RAMPS where the new ones have steps. That is a change to the
-forward model, so no dataset or calibration built before it is comparable with
-one built after - the whole workspace has to be rebuilt, not topped up.
+Why this exists: anything that changes how the forward model is BUILT - the
+`sg.rss`/`ep.rss` resampling is `method="nearest"`, so an interface is a step
+and not a one-cell ramp - makes every dataset and calibration already on disk
+incomparable with a new one. Such a workspace cannot be topped up; it is
+rebuilt whole, which is what this does.
 
 The existing forward directory is MOVED aside (never deleted), so the old
 linear-resampled workspace stays available for comparison.

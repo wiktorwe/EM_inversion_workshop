@@ -1,13 +1,10 @@
 """Shared 1D layered-inversion core (model parameterisation + misfit).
 
-These four functions were defined inside `05_1d_inversion.ipynb`'s single code
-cell, which made them unreachable from any script. They are moved here verbatim
-(bar the frequency-subset support added for the multi-scale ladder) so notebook
-05 and `scripts/experiments/multiscale_1d.py` share ONE implementation - a
-second copy of the misfit is exactly how a prototype and the thing it is
-prototyping quietly diverge.
-
-The notebook imports these; it no longer defines them.
+The model parameterisation and the misfit live HERE, not in
+`05_1d_inversion.ipynb`'s single code cell: the notebook imports them, and so
+does `scripts/experiments/multiscale_1d.py`. A second copy of the misfit is
+exactly how a prototype and the thing it is prototyping quietly diverge, and a
+copy inside a notebook cell is unreachable from any script.
 """
 
 from __future__ import annotations
@@ -34,14 +31,14 @@ def unpack_model_params(params, n_layers, z_start_rel, z_end_rel):
     out of, and the total span is a CONSTANT of the run rather than a property
     of the candidate.
 
-    This used to take `snap_dz`/`snap_origin_rel` and snap the interface depths
-    onto one grid, in the tx-RELATIVE frame. Snapping now lives in
-    `analytic_1d_forward.snap_interfaces_to_grid` and is applied inside
+    NO SNAPPING HAPPENS HERE. It lives in
+    `analytic_1d_forward.snap_interfaces_to_grid`, applied inside
     `forward_1d_gains`, in ABSOLUTE depth and PER FREQUENCY, because each
     dataset of an acquisition matrix resamples the same `sg.rss` on its own `dx`
     and so quantises the same true interface to a different depth (measured
     6020.1 / 6020.875 / 6020.8 m at 2/4/6 kHz for a true interface at 6020.5 m).
-    One relative grid could only ever be right for one tone of a joint fit.
+    One grid in the tx-RELATIVE frame could only ever be right for one tone of
+    a joint fit.
     """
     p = np.asarray(params, dtype=float)
     lrho = p[:n_layers]
@@ -182,14 +179,14 @@ def forward_analytic_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, 
     rho, thk, _ = unpack_model_params(params, n_layers, z_start_rel, z_end_rel)
     tx_z = float(tx_entry["tx_z"])
     off_x = np.asarray(tx_entry["off_x"], dtype=float)
-    # PER-RECEIVER depths. This used to be `tx_z + off_z[0]`, which silently
-    # forced every receiver of a transmitter to the FIRST receiver's depth.
-    # Harmless for the workshop's default colinear, zero-depth-offset survey
-    # (all off_z are 0), wrong the moment anyone uses depth-offset receivers -
-    # and inconsistent with `fdtd_analytic_calibration`'s
-    # `layered_analytic_gains`/`homogeneous_analytic_gains`, which have always
-    # looped over unique receiver depths. `forward_1d_gains` now accepts the
-    # array and does the same grouping.
+    # PER-RECEIVER depths. Collapsing these to `tx_z + off_z[0]` would force
+    # every receiver of a transmitter to the FIRST receiver's depth: harmless
+    # for the workshop's default colinear, zero-depth-offset survey (all off_z
+    # are 0), wrong the moment anyone uses depth-offset receivers, and
+    # inconsistent with `fdtd_analytic_calibration`'s
+    # `layered_analytic_gains`/`homogeneous_analytic_gains`, which loop over
+    # unique receiver depths. `forward_1d_gains` takes the array and does the
+    # same grouping.
     rx_depth_m = tx_z + np.asarray(tx_entry["off_z"], dtype=float)
     freqs_full = np.asarray(tx_entry["freqs"], dtype=float)
     freqs = freqs_full
@@ -273,16 +270,14 @@ def complex_gain_objective(
 #     Cxx = Hx from Kx      Cxz = Hz from Kx
 #     Czx = Hx from Kz      Czz = Hz from Kz
 #
-# The inversion used to fit only Cxx and Cxz - Hx and Hz from a single Kx source
-# - because `forward_1d_gains` was hardcoded to the Kx solver. Fitting the full
-# tensor needs one forward call per SOURCE (not per component), so the cost is
-# 2x, not 4x.
+# Fitting the full tensor needs one forward call per SOURCE, not one per
+# component, so it costs 2x a single-source fit and not 4x.
 #
 # The map itself lives in `fd_visualization`, because the plot GUIs need it too
 # (to label the freq x source x receiver view selector) and this module already
 # imports that one - defining it in both places is how the two would drift.
 from scripts.modules.fd_visualization import TENSOR_COMPONENTS  # noqa: E402
-DEFAULT_COMPONENTS = ("Cxx", "Cxz")          # the historical Kx-only pair
+DEFAULT_COMPONENTS = ("Cxx", "Cxz")          # Hx and Hz from a single Kx source
 
 
 def forward_tensor_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
