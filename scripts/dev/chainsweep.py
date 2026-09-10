@@ -140,8 +140,15 @@ def run(nb_dir: Path = ROOT):
     from scripts.modules import workshop_config
     donor = _find_donor(ROOT / "workspace" / "2D" / "forward")
     if donor is None:
-        print(f"SKIP: need a donor dataset under "
-              f"{ROOT / 'workspace' / '2D' / 'forward'} to build the fixture.")
+        # Say this loudly. A quiet "SKIP" next to three PASSes reads as a fourth
+        # pass, and this is the one check that catches the matrix path-binding
+        # bug - the bug that reached a user. A fresh clone has no workspace, so
+        # this is the DEFAULT state, not an edge case.
+        print(f"SKIP: no donor dataset under "
+              f"{ROOT / 'workspace' / '2D' / 'forward'} to build the fixture from.")
+        print("\nRESULT: NOT VERIFIED - the path-binding invariant was NOT tested.")
+        print("        Run Step 01 (or scripts/rebuild_matrix_workspace.py) first,")
+        print("        then re-run this sweep. Do not read this as a pass.")
         return 0
     print(f"donor dataset: {donor}")
 
