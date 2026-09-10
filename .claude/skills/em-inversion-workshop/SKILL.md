@@ -279,7 +279,8 @@ breakage. The `eps_r` type change is the type specimen: `matrix_setup` and
 called done. The **name** was updated. The **contract** was not. Every site
 that still did `float(eps_r)` died in the GUI (`check_kx_convergence` →
 `layers_from_rho_thk`, `build_1d_run_summary`, notebook 05's true-model QC,
-notebook 06's synthetics). That is KNOWN_ISSUES §9.
+notebook 06's synthetics). It was KNOWN_ISSUES §9 until it was fixed; the
+entry is gone, the lesson is not.
 
 A type or shape change (scalar → array, one path → per-dataset, one `C` →
 per-source) does not introduce a new symbol. Grepping the name and updating
@@ -687,6 +688,29 @@ all of `scripts/experiments/`}
   all four tensor components: reduced chi-squared 0.0660 unsnapped, **0.0296**
   snapped. The deepest interior interface is the pinned depth-window edge and is
   not fitted, so it is not snapped (`pin_last`).
+- **`C(f)` is COMPUTED, not fitted: `C = dx*dz*s(order)`.** The engine injects
+  the wavelet into one cell as `H += (dt/MU)*wav`, which represents `K*delta`
+  integrated over that cell, so the moment is `wav*dx*dz`; `s = sum c_n(2n+1)`
+  is the stencil consistency factor (0.999882 at order 6). Verified against the
+  fitted value to **0.430 %** worst case over 6 datasets, phase <=0.081 deg
+  (`scripts/experiments/analytic_C_check.py`). `scripts/modules/fd_error_model.py`
+  is the one implementation. The Step 02 calibration run still happens - as a
+  VALIDATION that the computed value holds, not as the source of it.
+- **`sigma` is an error budget, not a fit residual.** Per frequency AND per
+  receiver, relative to the datum: `(dx/r)^2` near-source spreading, `1-s`,
+  half-cell interface quantisation, 0.22 % analytic quadrature. `eps_r`
+  inflation contributes ZERO - it biases both sides equally. It halved the
+  recovered model error (0.8417 -> 0.3569 rms log10 rho).
+- **Snapping and the budget's quantisation term are ALTERNATIVES.** Snapping
+  removes the error from the residual; charging for it in sigma too is
+  double-counting and measured WORSE (0.9357) than snapping alone. Removing
+  snapping and relying on the budget is worse still (0.9662).
+  `analytic_tensor_calibration` zeroes the term when `cfg["snap_dz"]` is set.
+- **The fitted sigma EXCEEDED the signal on the cross-couplings** (24-92x the
+  budget, and larger than |obs| itself), because it was fitted where Hz is a
+  near-null. Those components were nominally fitted and effectively were not -
+  so any result that quotes an all-four-component improvement needs re-running.
+  See KNOWN_ISSUES 5.
 - **Every per-frequency dataset has its own grid, its own C and its own
   `n_periods_extract`.** Never read a whole band out of one per-frequency
   dataset - it only contains the tone it was designed for, and the others are

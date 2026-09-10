@@ -130,6 +130,26 @@ same true interface at 6020.5 m lands at 6020.1 / 6020.875 / 6020.8 m in the
 | true model, no snapping | 0.0660 |
 | true model, snapped per frequency | **0.0296** |
 
+**Snapping is required, and the error budget is not a substitute for it.**
+Measured on the co-components (`scripts/experiments/sigma_budget_ab.py`, 3 Tx,
+DE popsize 10 / maxiter 30, seed 42), as recovered-model error against the
+truth - NOT chi-squared, which is not comparable across rows because sigma
+differs:
+
+| configuration | rms error in log10 rho | chi2 (data) |
+|---|---|---|
+| fitted sigma + snapping | 0.8417 | 3.32 |
+| **analytic budget sigma + snapping** | **0.3569** | **1.58** |
+| analytic budget sigma, NO snapping | 0.9662 | 3.76 |
+
+Two things follow. The analytic error budget (`scripts/modules/fd_error_model.py`)
+more than halves the model error against the fitted sigma. And snapping is what
+makes it work - removing it is worse than either. They are ALTERNATIVES for the
+quantisation term, not partners: when the candidate is snapped the error is gone
+from the residual, so `analytic_tensor_calibration` sets the budget's
+quantisation term to zero. Charging for it twice measured 0.9357, worse than
+snapping alone.
+
 **What remains.** The FD grid still quantises the Earth: the deepest interior
 interface in the inversion's parameterisation is pinned at the depth-window
 edge and is not fitted, so it is not snapped, and a stack whose interfaces
@@ -140,7 +160,51 @@ about it). Neither limits this survey - chi2 0.03 is far inside the noise floor
 
 ---
 
-## 5. The 3D / ADI path is unvalidated
+## 5. A 1D inversion cannot fit the cross-couplings, and the old sigma hid it
+
+**Status: measured, and it changes how a documented result should be read.**
+
+`Cxz` and `Czx` are near-nulls in a layered Earth: a 1D model predicts them
+essentially zero. In the production data they are NOT zero - they are created by
+the 2D fault structure, which is exactly why `experiments/lookahead.py` uses
+them to see ahead of the bit. So a 1D inversion is being asked to fit data its
+model class cannot produce.
+
+This was invisible while `sigma` came from the FDTD calibration fit, because
+that sigma was **larger than the datum itself** on those components. Measured on
+the rebuilt matrix, transmitter 0, near receiver:
+
+| component | \|obs\| | sigma, fitted | sigma, analytic budget | ratio |
+|---|---|---|---|---|
+| Cxx 2 kHz | 1.05e-01 | 1.93e-03 | 1.34e-03 | 1.4x |
+| Czz 2 kHz | 1.20e-01 | 2.33e-03 | 7.99e-03 | 0.3x |
+| **Cxz 2 kHz** | **9.11e-05** | **1.44e-04** | 6.09e-06 | **24x** |
+| **Czx 2 kHz** | **8.90e-05** | **1.05e-04** | 1.14e-06 | **92x** |
+
+On the co-components the two agree within a factor 0.3-1.4 - the budget is
+sound. On the cross-couplings the fitted sigma EXCEEDS the signal, i.e. the old
+calibration was quietly saying "these are noise, ignore them". That is the
+near-null artifact of §6 doing real damage: the components were nominally being
+fitted and effectively were not.
+
+With an honest sigma they carry their true weight, and the 1D fit to them is bad
+- reduced chi-squared **342** over all four components against **1.79** with the
+old sigma. The data is not worse; the model is inadequate, and now says so.
+
+**What this means for a claim already in the docs.** The skill and notebook 05
+record that fitting all four components improves both criteria (chi2 0.7596 vs
+0.8140). That comparison was made with a sigma that made the cross-couplings
+nearly weightless, so it mostly measured nothing. It needs re-running before it
+is quoted again.
+
+**Fix - not attempted, because it is a modelling decision, not a bug:** either
+exclude the cross-couplings from the 1D objective (they are a 2D observable), or
+add a model-inadequacy term to their sigma. Inventing that term without deriving
+it would just rebuild the thing this change removed.
+
+---
+
+## 6. The 3D / ADI path is unvalidated
 
 **Status: parses, never checked.**
 
@@ -151,7 +215,7 @@ validation has ever been run against `mpiEmmodADI3d` from this workshop. Treat
 
 ---
 
-## 6. Cxz-vs-Czx look-ahead distances are partly a threshold artifact
+## 7. Cxz-vs-Czx look-ahead distances are partly a threshold artifact
 
 **Status: a caveat on a reported result, not a bug.**
 
@@ -167,7 +231,7 @@ geometry, which is why it is still here.
 
 ---
 
-## 7. The true-model fit depends strongly on the calibration Earth
+## 8. The true-model fit depends strongly on the calibration Earth
 
 **Status: measured. The entry that used to be here - "the TRUE model does not
 fit", reduced chi-squared 3.92 - was about a matrix calibrated with

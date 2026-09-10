@@ -361,16 +361,40 @@ def tensor_objective_parts(params, tx_entry, n_layers, z_start_rel, z_end_rel, e
         if obs is None:
             continue
         obs = np.asarray(obs, dtype=complex)
-        sig = np.asarray(cal["sigma"][comp], dtype=float)
+        # sigma may be PER FREQUENCY [nfreq] (the fitted calibration) or PER
+        # FREQUENCY AND RECEIVER [nfreq, nrx] (the analytic budget). A relative
+        # budget is scaled by THIS transmitter's own data here, rather than
+        # being baked in per Tx, so one calibration object serves every Tx.
+        rel = (cal.get("sigma_rel") or {}).get(comp)
+        if rel is not None:
+            rel = np.asarray(rel, dtype=float)
+            sig = rel * np.abs(obs)
+            med = np.nanmedian(np.where(np.abs(obs) > 0, np.abs(obs), np.nan), axis=1)
+            med = np.where(np.isfinite(med), med, 1.0)[:, None]
+            sig = np.maximum(sig, rel * med * 1e-2)
+        else:
+            sig = np.asarray(cal["sigma"][comp], dtype=float)
         src = TENSOR_COMPONENTS[comp][0]
         C = cal["C"].get(src)
         C = None if C is None else np.asarray(C, dtype=complex)
         if m is not None:
-            obs, sig = obs[m], sig[m]
+            obs = obs[m]
+            sig = sig[m]
             if C is not None:
                 C = C[m]
+        # `sig[:, None]` on an ALREADY 2-D sigma would silently insert an axis
+        # and broadcast the receivers against each other rather than raising -
+        # so decide by shape, explicitly. A per-frequency sigma legitimately
+        # becomes (nfreq, 1) and broadcasts across receivers; a per-receiver one
+        # must already match.
+        if sig.ndim == 1:
+            sig = sig[:, None]
+        if sig.shape not in (obs.shape, (obs.shape[0], 1)):
+            raise ValueError(
+                f"sigma for {comp} has shape {sig.shape}, expected {obs.shape} "
+                f"(per receiver) or ({obs.shape[0]}, 1) (per frequency)")
         scale = C[:, None] if C is not None else 1.0
-        res = (scale * pred[comp] - obs) / np.maximum(sig[:, None], 1e-300)
+        res = (scale * pred[comp] - obs) / np.maximum(sig, 1e-300)
         good = np.isfinite(res)
         if not np.any(good):
             continue
@@ -544,20 +568,111 @@ def component_weights(cfg):
     return {c: float(cfg.get(keys[recv], 1.0)) for c, (_src, recv) in TENSOR_COMPONENTS.items()}
 
 
-def resolve_tensor_calibration(cfg, setup_meta_path):
+def analytic_tensor_calibration(cfg, tx_entry, components=DEFAULT_COMPONENTS):
+    """Per-source C and a per-component RELATIVE error budget, computed.
+
+    No FDTD run, no fitting. `C = dx*dz*s(order)` and the budget is assembled
+    from `fd_error_model` - see that module for what is in it and why.
+
+    Returns the same shape as `tensor_calibration` plus `sigma_rel`:
+
+        C          {source: complex [nfreq]}   - real-valued, but complex dtype
+                                                 so every consumer is unchanged
+        sigma_rel  {component: [nfreq, nrx]}   - RELATIVE, scaled by each Tx's
+                                                 own |obs| in the objective
+        sigma      {component: [nfreq, nrx]}   - absolute, for THIS tx_entry
+
+    Why relative: the fitted sigma was one absolute number per frequency,
+    inherited from the calibration run's amplitude scale and constant across
+    offsets - so the near offset dominated the misfit and the far offset was
+    effectively ignored. A relative budget weights them as the physics does.
+    """
+    from scripts.modules import fd_error_model as fem
+
+    comps = tuple(components)
+    freqs = np.asarray(tx_entry["freqs"], dtype=float).reshape(-1)
+    off_x = np.asarray(tx_entry["off_x"], dtype=float).reshape(-1)
+    order = int(cfg["fd_order"])
+    dx = np.asarray(cfg["dx"], dtype=float).reshape(-1)
+    if dx.size == 1:
+        dx = np.full(freqs.size, float(dx[0]))
+    if dx.size != freqs.size:
+        raise ValueError(f"dx has {dx.size} entries but there are {freqs.size} frequencies")
+
+    C = {s_: np.asarray([fem.analytic_C(float(d), order) for d in dx], dtype=complex)
+         for s_ in sorted({TENSOR_COMPONENTS[c][0] for c in comps})}
+
+    # Snapping and the quantisation term are ALTERNATIVES. If the candidate is
+    # snapped onto the grid the error is gone from the residual, so charging for
+    # it in sigma too is double-counting - measured worse (0.9357 vs 0.8417).
+    if cfg.get("snap_dz") is not None:
+        quant = {"HX": np.zeros(freqs.size), "HZ": np.zeros(freqs.size)}
+    else:
+        quant = cfg.get("quantisation_rel")
+    if quant is None:
+        tx_z = float(tx_entry["tx_z"])
+        quant = {"HX": np.empty(freqs.size), "HZ": np.empty(freqs.size)}
+        eps = np.asarray(cfg["eps_r"], dtype=float).reshape(-1)
+        if eps.size == 1:
+            eps = np.full(freqs.size, float(eps[0]))
+        for i in range(freqs.size):
+            q = fem.interface_quantisation_rel(
+                freqs[i:i + 1], off_x, tx_z, eps[i:i + 1], float(dx[i]),
+                rx_depth_m=tx_z + np.asarray(tx_entry["off_z"], dtype=float))
+            quant["HX"][i] = q["HX"][0]
+            quant["HZ"][i] = q["HZ"][0]
+
+    sigma_rel, sigma = {}, {}
+    for c in comps:
+        obs = tx_entry.get("obs", {}).get(c)
+        if obs is None:
+            continue
+        recv = TENSOR_COMPONENTS[c][1]
+        # dx is per frequency, so the geometric term is too - build it row by row
+        # rather than handing `sigma_budget` a single dx it would apply to the
+        # whole band.
+        rows_rel, rows_sig = [], []
+        for i in range(freqs.size):
+            b = fem.sigma_budget(np.asarray(obs, dtype=complex)[i:i + 1], off_x,
+                                 float(dx[i]), order,
+                                 quantisation_rel=np.asarray(quant[recv])[i])
+            rows_rel.append(b["rel"][0])
+            rows_sig.append(b["sigma"][0])
+        sigma_rel[c] = np.asarray(rows_rel, dtype=float)
+        sigma[c] = np.asarray(rows_sig, dtype=float)
+
+    return {"C": C, "sigma": sigma, "sigma_rel": sigma_rel,
+            "freqs_hz": freqs, "method": "analytic",
+            "notes": (f"C = dx*dz*s(order={order}), s={fem.stencil_consistency(order):.6f}; "
+                      f"sigma from the analytic error budget (no FDTD calibration)")}
+
+
+def resolve_tensor_calibration(cfg, setup_meta_path, tx_entry=None):
     """Per-source C and per-component sigma for the components `cfg` selects.
 
-    A Kx-only selection reuses the flat active calibration
-    (`fdtd_analytic_calibration.calibration_for_inversion`) exactly as before, so
-    the historical two-component path is bit-for-bit unchanged. Anything
-    involving Kz is assembled from `fdtd_analytic_calibration_by_source`, where
-    Step 02 stores every calibration it has run.
+    DEFAULT: the ANALYTIC model (`analytic_tensor_calibration`) - no FDTD run,
+    no fitting. `C = dx*dz*s(order)` is derived from the engine's source
+    injection, and sigma is an explicit error budget. Requires `tx_entry` (the
+    budget is relative to the data) and `cfg["dx"]` / `cfg["fd_order"]`.
+
+    Set `cfg["calibration_source"] = "fitted"` to fall back to the FDTD-fitted
+    values in `setup_metadata.json`. That escape hatch exists because the
+    comparison between the two IS the validation - see
+    `scripts/experiments/analytic_C_check.py` - not because the fitted path is
+    an equal alternative: it is fitted on a geometry where Hz sits on a
+    near-null, which is what made its sigma unusable for the cross-couplings.
 
     This lived in notebook 05 and so was unreachable from `inversion_tuning`,
     which is why the tuners kept their own Kx-only calibration handling and
     tuned a different objective from the one the run minimised.
     """
     comps = tuple(cfg.get("components") or DEFAULT_COMPONENTS)
+    if str(cfg.get("calibration_source", "analytic")).lower() == "analytic":
+        if tx_entry is None:
+            raise ValueError(
+                "The analytic calibration is relative to the data, so it needs a "
+                "tx_entry. Pass one, or set cfg['calibration_source']='fitted'.")
+        return analytic_tensor_calibration(cfg, tx_entry, components=comps)
     sources = sorted({TENSOR_COMPONENTS[c][0] for c in comps})
     cal = cfg.get("calibration")
     if sources == ["HX"] and cal is not None:

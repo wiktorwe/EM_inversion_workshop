@@ -83,10 +83,16 @@ def main() -> int:
     tx = feats["tx_data"][args.tx]
     meta = ROOT / args.hx_dir / "setup_metadata.json"
 
+    _meta = json.loads(meta.read_text())
+
     def run(components):
         cfg = {
             "n_layers": args.n_layers, "z_start_rel": args.z_start, "z_end_rel": args.z_end,
-            "eps_r": float(json.loads(meta.read_text())["eps_r_used"]),
+            "eps_r": float(_meta["eps_r_used"]),
+            # The FD design the data was modelled on. `C = dx*dz*s(order)` and
+            # the error budget's near-source term is `(dx/r)^2`, so the analytic
+            # calibration needs both.
+            "dx": float(_meta["dx_model_target_m"]), "fd_order": int(_meta["fd_order"]),
             "log10_rho_min": 0.0, "log10_rho_max": np.log10(150.0),
             "log10_thk_min": np.log10(5.0), "log10_thk_max": np.log10(50.0),
             "thk_min": 5.0, "reg_lambda": 500.0, "w_hxh": 1.0, "w_hxhz": 1.0,
@@ -95,7 +101,11 @@ def main() -> int:
         }
         g["SETUP_META"] = meta
         out = g["_invert_single_tx_blockinv"](tx, cfg)
-        cal = resolve_tensor_calibration({"components": ALL}, meta)
+        # Score every run against the SAME calibration the notebook's inversion
+        # uses. `cfg` already carries `dx` / `fd_order`, so this is the analytic
+        # one; the tx_entry is needed because its error budget is relative to
+        # the data.
+        cal = resolve_tensor_calibration(dict(cfg, components=ALL), meta, tx_entry=tx)
         # score EVERY run on all four components, so the rows are comparable
         mis = tensor_objective(out["params"], tx, cfg["n_layers"], cfg["z_start_rel"],
                                cfg["z_end_rel"], cfg["eps_r"], 0.0, cal, components=ALL)

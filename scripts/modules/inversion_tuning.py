@@ -100,7 +100,7 @@ def split_objective(
     )
 
 
-def _components_and_cal(cfg: Mapping[str, Any]):
+def _components_and_cal(cfg: Mapping[str, Any], tx_entry=None):
     """The components, calibration and weights the tuners must use.
 
     Resolved from `cfg` exactly as `invert_single_tx` resolves them, so a tuner
@@ -109,7 +109,10 @@ def _components_and_cal(cfg: Mapping[str, Any]):
     components = tuple(cfg.get("components") or DEFAULT_COMPONENTS)
     cal = cfg.get("tensor_calibration")
     if cal is None:
-        cal = resolve_tensor_calibration(cfg, cfg.get("setup_meta_path"))
+        # `tx_entry` is required by the ANALYTIC calibration, whose error budget
+        # is relative to the data. Callers here always have one.
+        cal = resolve_tensor_calibration(cfg, cfg.get("setup_meta_path"),
+                                         tx_entry=tx_entry)
     return components, cal, component_weights(cfg)
 
 
@@ -126,7 +129,7 @@ def relative_objective_spread(values: Sequence[float]) -> float:
 
 def run_de_once(cfg: Mapping[str, Any], tx_entry: Mapping[str, Any], seed: int) -> Dict[str, Any]:
     """One DE inversion; returns params and split objective terms."""
-    components, cal, weights = _components_and_cal(cfg)
+    components, cal, weights = _components_and_cal(cfg, tx_entry)
     n_layers = int(cfg["n_layers"])
     bounds = build_bounds(
         n_layers,

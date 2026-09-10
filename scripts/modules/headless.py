@@ -557,6 +557,29 @@ def run_calibration_matrix(out_root: Path | str, *, method: str, nproc: int = 6,
                 entry["error"] = f"{type(exc).__name__}: {exc}"
                 if verbose:
                     print(f"       FAILED: {entry['error']}")
+            # VALIDATION, not production. The inversion computes C from
+            # `fd_error_model.analytic_C(dx, order)`; this run exists to check
+            # that the computed value is right. Report the deviation here, where
+            # the fitted number is in hand, so a regression in the engine's
+            # source normalisation shows up as a number rather than as a
+            # slightly worse inversion months later.
+            if entry.get("ok"):
+                try:
+                    from scripts.modules.fd_error_model import analytic_C
+                    meta_i = d.get("meta") or json.loads(
+                        (Path(d["run_dir"]) / "setup_metadata.json").read_text())
+                    want = analytic_C(float(meta_i["dx_model_target_m"]),
+                                      int(meta_i["fd_order"]))
+                    c_abs = np.abs(np.asarray(entry["cal"]["C_hxhz_shared"],
+                                              dtype=complex))
+                    dev = 100.0 * (c_abs / want - 1.0)
+                    entry["analytic_C"] = float(want)
+                    entry["deviation_from_analytic_pct"] = [float(v) for v in dev]
+                    if verbose:
+                        print(f"       vs computed C = {want:.6f}: "
+                              + ", ".join(f"{v:+.3f} %" for v in dev))
+                except Exception as exc:                  # noqa: BLE001
+                    entry["analytic_C_error"] = f"{type(exc).__name__}: {exc}"
             results.append(entry)
             if on_progress is not None:
                 on_progress(len(results), len(ds) * len(wanted), d, entry)
@@ -564,6 +587,11 @@ def run_calibration_matrix(out_root: Path | str, *, method: str, nproc: int = 6,
     if verbose:
         n_ok = sum(1 for r in results if r.get("ok"))
         print(f"\nCalibrated {n_ok}/{len(results)} dataset-source pairs with {method}.")
+        devs = [abs(v) for r in results
+                for v in (r.get("deviation_from_analytic_pct") or [])]
+        if devs:
+            print(f"  worst deviation from the COMPUTED C: {max(devs):.3f} % "
+                  f"(the inversion uses the computed one; this run validates it)")
         for r in results:
             if not r.get("ok"):
                 print(f"  FAILED {r['name']} [{r['source_field']}]: {r['error']}")

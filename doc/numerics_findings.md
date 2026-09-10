@@ -347,6 +347,58 @@ can be described here. Neither binds this survey at chi2 0.03.
 
 ---
 
+## 6b. C(f) is computed, not fitted, and sigma is an error budget
+
+`C` used to come from an extra FDTD run least-squares matched to the analytic
+solver. Two things were wrong with that as a PRODUCTION mechanism.
+
+**It measured almost nothing.** `|C| = dx*dz` is derivable: the engine injects
+the wavelet into one cell as `H += (dt/MU)*wav` (`WavesEmTE2D.cpp:796,817`),
+representing `K*delta` integrated over that cell. Times the stencil consistency
+factor `s = sum c_n(2n+1)` (0.999882 at order 6), that is the whole of `C` to
+within the offset-dependent term below.
+
+**It was fitted where a component is a near-null.** Hz from a Kx line source
+vanishes at the source depth. The homogeneous calibration breaks that with
+receivers at +/-20 m; the lateral-average one keeps the production colinear
+geometry, so Hz was fitted ON the null.
+
+`scripts/modules/fd_error_model.py` computes both. Falsification test
+(`scripts/experiments/analytic_C_check.py`), 6 datasets on the rebuilt matrix:
+
+| | worst |
+|---|---|
+| deviation of fitted \|C\| from computed | **0.430 %** (pass band 0.5 %) |
+| fitted phase (computed C is real) | **0.081 deg** |
+
+0.43 % is the same order as the `(dx/r)^2` near-source term (0.37 % at the near
+offset), i.e. exactly where the unmodelled part should sit.
+
+**The sigma budget**, per frequency AND per receiver, relative to the datum:
+`(dx/r)^2` geometric, `1-s` stencil, half-cell interface quantisation (measured,
+and zero when the candidate is snapped instead), analytic kx quadrature 0.22 %.
+`eps_r` inflation contributes ZERO - it biases both sides equally.
+
+Against the fitted sigma, transmitter 0, near receiver:
+
+| component | \|obs\| | fitted | budget | ratio |
+|---|---|---|---|---|
+| Cxx 2 kHz | 1.05e-01 | 1.93e-03 | 1.34e-03 | 1.4x |
+| Czz 2 kHz | 1.20e-01 | 2.33e-03 | 7.99e-03 | 0.3x |
+| Cxz 2 kHz | 9.11e-05 | 1.44e-04 | 6.09e-06 | 24x |
+| Czx 2 kHz | 8.90e-05 | 1.05e-04 | 1.14e-06 | 92x |
+
+The co-components agree within 0.3-1.4x. On the cross-couplings the fitted sigma
+EXCEEDED THE SIGNAL - the near-null artifact meant those components were
+nominally fitted and effectively were not. See KNOWN_ISSUES 5.
+
+Recovered-model error against the truth (co-components, 3 Tx):
+fitted+snapping **0.8417**, budget+snapping **0.3569**, budget without snapping
+**0.9662**. Snapping and the budget's quantisation term are alternatives; using
+both double-counts and measured 0.9357.
+
+---
+
 ## 7. Artificial permittivity: real, small, and invisible to the calibration
 
 `design_explicit_fd` inflates `eps_r` to buy a larger explicit time step, and
