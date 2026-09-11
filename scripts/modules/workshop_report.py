@@ -14,6 +14,7 @@ from typing import Any, Mapping, Optional, Sequence
 import numpy as np
 
 from scripts.modules.fd import read_cfg_values
+from scripts.modules.inversion import available_synthetic_pairs, find_observed_records
 from scripts.modules.fd_visualization import (
     compute_gains_for_fd_outputs,
     load_rss_traces,
@@ -60,8 +61,6 @@ def _display_path(path: Any, root: Path | None = None) -> Optional[str]:
         return text[:40] + "..." + text[-40:]
     return text
 SG_UP_RE = re.compile(r"sg_up\.rss-(\d+)$")
-HX_MOD_RE = re.compile(r"data_Hx_mod\.rss-(\d+)$")
-HX_ALT_RE = re.compile(r"data_mod_HX\.rss-(\d+)$")
 
 OPTMETHOD_LABEL = {
     "1": "L-BFGS",
@@ -232,34 +231,6 @@ def latest_sg_up_file(run_dir: Path) -> Optional[Path]:
         return int(m.group(1)) if m else -1
 
     return sorted(candidates, key=lambda p: (_suffix(p), p.name))[-1]
-
-
-def available_synthetic_pairs(run_dir: Path) -> list[tuple[int, Path, Path]]:
-    run_dir = Path(run_dir)
-    pairs: list[tuple[int, Path, Path]] = []
-    seen: set[tuple[int, str, str]] = set()
-
-    def _add(idx: int, hx: Path, hz: Path) -> None:
-        key = (int(idx), str(hx), str(hz))
-        if key in seen or not hx.exists() or not hz.exists():
-            return
-        seen.add(key)
-        pairs.append((int(idx), Path(hx), Path(hz)))
-
-    for hx in run_dir.glob("data_Hx_mod.rss-*"):
-        m = HX_MOD_RE.search(hx.name)
-        if m:
-            idx = int(m.group(1))
-            _add(idx, hx, run_dir / f"data_Hz_mod.rss-{idx}")
-    for hx in run_dir.glob("data_mod_HX.rss-*"):
-        m = HX_ALT_RE.search(hx.name)
-        if m:
-            idx = int(m.group(1))
-            _add(idx, hx, run_dir / f"data_mod_HZ.rss-{idx}")
-    _add(-2, run_dir / "data_Hx_mod.rss", run_dir / "data_Hz_mod.rss")
-    _add(-1, run_dir / "data_mod_HX.rss", run_dir / "data_mod_HZ.rss")
-    pairs.sort(key=lambda item: item[0])
-    return pairs
 
 
 def _kv_table(rows: Sequence[tuple[str, Any]], caption: Optional[str] = None) -> str:
@@ -738,11 +709,11 @@ def write_2d_figures(ctx: ReportContext) -> None:
         )
         return
     _, hx_syn, hz_syn = pairs[-1]
-    hx_obs = run_dir / "Hx_data.rss"
-    hz_obs = run_dir / "Hz_data.rss"
-    if not hx_obs.exists() or not hz_obs.exists():
-        hx_obs = ctx.cfg.inv_2d_input_dir / "Hx_data.rss"
-        hz_obs = ctx.cfg.inv_2d_input_dir / "Hz_data.rss"
+    # `find_observed_records` handles both staged naming forms: a single-source
+    # run's Hx_data.rss/Hz_data.rss and a joint run's Hx_Hx_data.rss/Hx_Hz_data.rss.
+    obs = find_observed_records(run_dir) or find_observed_records(ctx.cfg.inv_2d_input_dir)
+    hx_obs = obs.get("HX", run_dir / "Hx_data.rss")
+    hz_obs = obs.get("HZ", run_dir / "Hz_data.rss")
     wav = run_dir / "wav2d.rss"
     if not wav.exists():
         wav = ctx.fwd_dir / str(ctx.setup_meta.get("forward_wavelet") or "wav2d.rss")

@@ -58,12 +58,14 @@ would put unphysical resistivities into the next stage's starting model.
 Per-stage weighting, uncertainties and aperture
 -----------------------------------------------
 `inversion.create_weight_file_from_hx` builds a Hann taper of length `nt` from
-THAT stage's own `Hx_data.rss`, so it is correct per stage with no extra
+THAT stage's own Hx record, so it is correct per stage with no extra
 work: each per-frequency run has its own record length (`rec_time =
 n_periods / f`, so the high-frequency records are shorter), and the weight file
-inherits it. The taper also happens to suppress the source ramp-up at the start
-of the record, which is the same transient `n_periods_extract` has to avoid on
-the phasor-extraction side.
+inherits it. ONE weight is shared by every component of a joint stage, on
+purpose - see `prepare_inversion_inputs` for why the cross-couplings are not
+up-weighted to match the co-components. The taper also happens to suppress the
+source ramp-up at the start of the record, which is the same transient
+`n_periods_extract` has to avoid on the phasor-extraction side.
 
 `apertx` is taken from each stage's own forward `setup_metadata.json`, not from
 the `inv.cfg` template. The template's `apertx = "60"` is a fallback only -
@@ -254,10 +256,18 @@ def stage_regularisation(freq_hz: float, f_max_hz: float, alpha_final: float,
 
 @dataclass
 class Stage:
+    """One inversion run of the ladder.
+
+    `source_fields` and `forward_dirs` are PLURAL because a stage can now be
+    joint: `mpiEminvTE2d` takes a comma-separated `source_type`, so several
+    source components go into one run and stack into one gradient. A
+    single-source stage is the one-entry case of the same thing.
+    """
+
     index: int
     freq_hz: float
-    source_field: str
-    forward_dir: Path
+    source_fields: tuple[str, ...]
+    forward_dirs: dict[str, Path]
     run_dir: Path
     dx_m: float
     dtx_m: float
@@ -269,8 +279,28 @@ class Stage:
     sg0_from: Optional[Path] = None
     resample_report: dict = field(default_factory=dict)
 
+    @property
+    def reference_dir(self) -> Path:
+        """The forward run to read the grid, true model and permittivity from.
+
+        Any of them would do: `prepare_inversion_inputs` asserts that every
+        source of a stage agrees on order/lpml/PML, and they are built by
+        `build_forward_matrix` from one `SetupParams` differing only in
+        `source_field`, so they share `sg.rss`, `ep.rss` and the survey.
+        """
+        return self.forward_dirs[self.source_fields[0]]
+
     def to_dict(self) -> dict:
-        d = {k: (str(v) if isinstance(v, Path) else v) for k, v in self.__dict__.items()}
+        d = {}
+        for k, v in self.__dict__.items():
+            if isinstance(v, Path):
+                d[k] = str(v)
+            elif isinstance(v, dict) and any(isinstance(x, Path) for x in v.values()):
+                d[k] = {kk: str(vv) for kk, vv in v.items()}
+            elif isinstance(v, tuple):
+                d[k] = list(v)
+            else:
+                d[k] = v
         return d
 
 
@@ -285,8 +315,9 @@ def build_ladder(
     reg_exponent: float = 1.0,
     joint_final_stage: bool = True,
     source_fields: Sequence[str] = ("HX",),
+    source_mode: str = "joint",
 ) -> list[Stage]:
-    """Stages, lowest frequency first, plus an optional final joint stage.
+    """Stages, lowest frequency first, plus an optional final stage.
 
     The design decision to make DELIBERATELY: whether stage k uses only f_k, or
     all frequencies up to and including f_k. The cumulative form is the more
@@ -294,33 +325,51 @@ def build_ladder(
     frequencies below f_k live on COARSER ones, so a cumulative stage has to run
     on the finest grid of its set and gives back part of the modelling saving.
 
-    The compromise implemented here is a strictly SEQUENTIAL ladder (each stage
+    The compromise implemented here is a strictly SEQUENTIAL ladder, each stage
     on its own grid, cheap, doing its classical job of producing a good starting
-    model), followed by ONE final joint stage on the finest grid using all
-    frequencies together, starting from the ladder's output - so the final model
-    actually fits every frequency rather than only the last one.
+    model. `joint_final_stage` then adds one more stage on the FINEST grid with
+    the final knot spacing and regularisation, starting from the ladder's output.
+    Note what that final stage is and is not: it re-inverts the highest frequency
+    with the final settings, it does NOT fit every frequency at once. A genuinely
+    all-frequency stage would need the lower tones resampled onto the fine grid
+    and is not built here.
 
-    MULTI-SOURCE, and what it can and cannot be with this engine.
-    `source_fields` cascades over source components INSIDE each frequency:
-    stage order is (f0,Kx), (f0,Kz), (f1,Kx), (f1,Kz), ... each starting from the
-    previous stage's model. Every dataset is therefore used, and the final model
-    has seen all of them.
+    MULTI-SOURCE. `source_fields` names the source components to invert;
+    `source_mode` decides how they are combined.
 
-    That is a CASCADE, not a joint inversion, and the difference is real: a
-    joint inversion sums the Kx and Kz gradients before stepping, so both
-    constrain the same update; a cascade fits one source, then moves to the
-    next, so the last source in each frequency has the final say.
+    "joint" (the default) puts ALL of them in ONE inversion per frequency.
+    `mpiEminvTE2d` takes a comma-separated `source_type`, so its work list spans
+    (shot x source type) and every source stacks into the same gradient: the
+    joint gradient is the sum of the per-source gradients, and every model update
+    sees all four tensor components at once. It costs about what the separate
+    single-source runs cost combined - roughly 2x one source for two of them, not
+    4x - because both receiver components already come from one propagation per
+    (shot, source).
 
-    The reason it is a cascade is an engine constraint, not a choice.
-    `mpiEminvTE2d` parses `source_type` as a single int and stores it as one
-    scalar on InversionEmTE2D; the switch that applies it
-    (lib/inversion/inversionEmTE2D.cpp) already sits INSIDE the per-shot loop,
-    but reads that global value, so every shot in a run gets the same source
-    type. A true joint multi-source inversion needs that value to become
-    per-shot - a small, well-localised change, but an UPSTREAM one in
-    rockem-suite, not something to bodge in the workshop.
+    "cascade" is the older behaviour: one stage per (frequency, source), each
+    starting from the previous stage's model. It is NOT forced by the engine any
+    more, and it is not equivalent - a cascade lets the last source of each
+    frequency have the final say, where a joint stage makes both constrain the
+    same update. Keep it for two things: bisecting which source component is
+    driving a result, and reproducing a ladder built before joint inversion
+    existed.
+
+    HARD REQUIREMENT for a joint stage: every record file it uses must share a
+    trace count, trace order, per-trace coordinates and time axis. The engine
+    builds ONE shot keymap from the first file and applies it to all of them, and
+    `apertx > 0` is a source-centred TOTAL width taken from each gather's own
+    coordinates, so a coordinate disagreement would silently give the same shot a
+    different local model per source type. `mpiEminvTE2d` checks this at startup
+    and aborts naming the file and the trace index
+    (src/mpiEminvTE2d.cpp:553-585). The workshop satisfies it because
+    `headless.build_forward_matrix` builds a frequency's source datasets with
+    `replace(p, source_field=src, ...)` - only `source_type` differs, the survey
+    is shared.
     """
     ladder_root = Path(ladder_root)
+    mode = str(source_mode).lower()
+    if mode not in {"joint", "cascade"}:
+        raise ValueError(f"source_mode must be 'joint' or 'cascade', got {source_mode!r}")
     runs = [r for r in per_frequency_manifest["runs"].values() if r.get("freq_hz") is not None]
     if not runs:
         raise ValueError(
@@ -337,16 +386,22 @@ def build_ladder(
     if missing:
         raise ValueError(f"Manifest is missing source datasets: {missing}")
 
+    # A joint stage covers every source at once; a cascade emits one per source.
+    groups = [tuple(sources)] if mode == "joint" else [(s,) for s in sources]
+
+    def _tag(srcs: Sequence[str]) -> str:
+        return "_".join(s.lower() for s in srcs)
+
     f_max = max(by_freq)
     stages: list[Stage] = []
     k = 0
     for f in sorted(by_freq):                      # lowest frequency first
-        for src in sources:                        # then cascade over sources
-            r = by_freq[f][src]
-            meta = r["meta"]
+        for srcs in groups:
+            meta = by_freq[f][srcs[0]]["meta"]
             stages.append(Stage(
-                index=k, freq_hz=f, source_field=src, forward_dir=Path(r["run_dir"]),
-                run_dir=ladder_root / f"stage{k}_f{f:.0f}Hz_{src.lower()}",
+                index=k, freq_hz=f, source_fields=tuple(srcs),
+                forward_dirs={s: Path(by_freq[f][s]["run_dir"]) for s in srcs},
+                run_dir=ladder_root / f"stage{k}_f{f:.0f}Hz_{_tag(srcs)}",
                 dx_m=float(meta["dx_model_target_m"]),
                 dtx_m=stage_knot_spacing(f, f_max, dt_final_m, knot_exponent),
                 dtz_m=stage_knot_spacing(f, f_max, dt_final_m, knot_exponent),
@@ -357,13 +412,12 @@ def build_ladder(
             ))
             k += 1
     if joint_final_stage:
-        for src in sources:
-            r = by_freq[f_max][src]
-            meta = r["meta"]
+        for srcs in groups:
+            meta = by_freq[f_max][srcs[0]]["meta"]
             stages.append(Stage(
-                index=len(stages), freq_hz=f_max, source_field=src,
-                forward_dir=Path(r["run_dir"]),
-                run_dir=ladder_root / f"stage_joint_{src.lower()}",
+                index=len(stages), freq_hz=f_max, source_fields=tuple(srcs),
+                forward_dirs={s: Path(by_freq[f_max][s]["run_dir"]) for s in srcs},
+                run_dir=ladder_root / f"stage_joint_{_tag(srcs)}",
                 dx_m=float(meta["dx_model_target_m"]),
                 dtx_m=dt_final_m, dtz_m=dt_final_m,
                 tik_sgregalpha=float(alpha_final), tv_sgregalpha=0.0,

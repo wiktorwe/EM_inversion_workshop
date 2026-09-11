@@ -557,21 +557,31 @@ previous one; every arrow is a place a change can break something.
 
 ### Step 03 - 2D inversion staging and run
 - **imports** `fd_visualization`, `headless`, `inversion`, `workshop_config`
-- **key chain fact** it stages and runs EVERY dataset, sequentially, in one
-  action. The runs cannot be joint - `mpiEminvTE2d` takes a single
-  `source_type` per run - but they are not a per-dataset choice either. Inputs
-  go to `inversion/input/<dataset>/`, each run records its dataset in
+- **key chain fact** it stages and runs one JOINT inversion per FREQUENCY, over
+  all of that frequency's source components, sequentially, in one action.
+  `mpiEminvTE2d` takes a comma-separated `source_type`, so its work list spans
+  (shot x source type) and the Kx and Kz gradients are summed before the step -
+  one model update sees all four tensor components. Inputs go to
+  `inversion/input/<freq>_hx_hz/`, each run records its group in
   `Run{N}/dataset.txt`, and Stop halts the whole batch rather than letting the
-  next dataset start.
+  next frequency start. `headless.group_datasets_by_frequency` is the one
+  grouping, shared with `multiscale_2d.build_ladder`.
 - **reads** a forward dataset: `mod.cfg` (for `order`, `lpml`, `pml_*`,
   `source_type`), `sg.rss`, `ep.rss`, `wav2d.rss`, `Data/{Hx,Hz}shot.rss`
 - **writes** `workspace/2D/inversion/input/` and `Run{N}/`: `inv.cfg`,
-  `sg0.rss`, `ep.rss`, `wav2d.rss`, `Hx_data.rss`, `Hz_data.rss`, `weight.rss`,
-  `Sg_min/max.rss`, `Local/`, `Results/`
-- **key chain fact** `prepare_inversion_inputs` PINS `order`, `lpml`, `pml_*`
-  and `source_type` from the forward `mod.cfg`. Anything the forward run
-  chooses that the inversion must match belongs in that list - a mismatch is a
-  silently wrong gradient, not an error.
+  `sg0.rss`, `ep.rss`, `wav2d.rss`, `weight.rss`, `Sg_min/max.rss`, `Local/`,
+  `Results/`, and the observed records - `Hx_data.rss`/`Hz_data.rss` for ONE
+  source, `Hx_Hx_data.rss` ... `Hz_Hz_data.rss` (one per source x receiver) for
+  a joint run. `inversion.find_observed_records` is the one reader for both
+  forms; do not hardcode either.
+- **key chain fact** `prepare_inversion_inputs` PINS `order`, `lpml` and `pml_*`
+  from the forward `mod.cfg`, and every forward run in a joint group must agree
+  on them (they share one `inv.cfg`, so one grid, stencil and PML). Anything the
+  forward run chooses that the inversion must match belongs in that list - a
+  mismatch is a silently wrong gradient, not an error. `source_type` is no
+  longer copied, because a joint run has several; instead each forward directory
+  is ASSERTED to name the source it is filed under, so a mis-filed dataset fails
+  loudly rather than fitting Kz data with a Kx source.
 
 ### Step 04 - 2D results
 - **imports** `fd_visualization`, `headless`, `rockem_bridge`, `segy`, `setup_defaults`
@@ -760,9 +770,47 @@ all of `scripts/experiments/`}
   grids.** Measured 2.61/1.95/0.90/0.64 at 1/2/4/6 kHz for `dx` =
   1.6/1.4/0.95/0.8 m. Compare `C/dx^2`; the real per-frequency spread is 2.04 %,
   not 300 %.
-- **`mpiEminvTE2d` takes ONE `source_type` per run.** Joint multi-source FWI
-  needs that to become per-shot upstream in rockem-suite. Even there the runs
-  are issued as ONE sequential batch, not as a per-dataset choice.
+- **`mpiEminvTE2d` takes a LIST of source types, and the 2D FWI is joint.**
+  `source_type = "3,5"` spans (shot x source type) in one work list; the joint
+  gradient IS the sum of the per-source gradients (measured 4.4e-08 relative L2
+  by `scripts/experiments/joint_source_gradient.py` on its tiny model, and
+  1.01e-07 once at production scale - 2 kHz, 30 shots, order 6), and it costs
+  about the two single-source runs combined, not 4x. Three things follow.
+  - The observed data is keyed `Recordfile_<SRC>_<REC>` - `Recordfile_HX_HZ` is
+    Hz recorded from a Kx source. With ONE source `Recordfile_<REC>` remains the
+    fallback and a pre-change `inv.cfg` runs byte-identically; that is a verified
+    upstream regression, so do NOT modernise single-source configs to the pair
+    form. `update_cfg_values` appends the pair keys via `allow_new` rather than
+    the template carrying them.
+  - Every record file must share trace count, trace order, per-trace coordinates
+    and time axis. `apertx > 0` is a source-centred TOTAL width from each
+    gather's own coordinates and ONE keymap is built from the first file, so a
+    disagreement would give the same shot a different local model per source.
+    The engine checks it at startup and names the file and trace index.
+  - `misfit.rss` and `source_grad.rss` hold `ngathers * nsources` entries,
+    SOURCE-MAJOR; `data_mod_*`/`data_res_*` gain a source tag ONLY when more than
+    one source is listed. `inversion.available_synthetic_pairs` is the one reader
+    for every naming form.
+- **A joint run's four components are told apart by the SOURCE axis, and only
+  `scripts/dev/tensorsweep.py` checks it.** Cxx/Cxz/Czx/Czz live in one run
+  directory as `Recordfile_<SRC>_<REC>` inputs and `data_mod_<SRC>_<REC>`
+  outputs, so every reader needs the source: `inversion.find_observed_records`
+  and `inversion.available_synthetic_pairs` both take `source_field`, and Step
+  04 passes its view's. Reading the Kx pair for a Czx view is not a NameError, a
+  bad path or a false sentence, so the other four sweeps PASS while the panel
+  mislabels half the tensor. It shipped that way once.
+- **The run and the view must agree on the frequency.** Each run inverts ONE
+  tone; `Run{N}/dataset.txt` records which. Step 03 reads it for the true model
+  it plots (per-frequency grids differ, and the colour limits come from it) and
+  Step 04 pins its view frequency to it. Without that link a 2 kHz run is
+  compared against a 6 kHz view and the phasor is extracted at a tone the record
+  does not carry.
+- **ONE `Dataweightfile` for every component of a joint run.** Do not add
+  `Dataweightfile_<SRC>` to "balance" the components. Cxz/Czx are weak on a
+  layered model because a 1D earth has no lateral structure for them to sense -
+  correct information, not an imbalance (section 4). Up-weighting them amplifies
+  noise and modelling error exactly where they carry no signal. The upstream key
+  is for differing acquisition NOISE between source types.
 - **THERE IS NO SINGLE-ANYTHING ACTION.** Step 01 fixes the frequencies and the
   sources; every step after it acts on all of them. No broadband run, no
   broadband wavelet, no broadband wavelet DISPLAY, no per-source calibration
@@ -790,7 +838,7 @@ all of `scripts/experiments/`}
   keyed on `(eps_r, snap_dz, snap_origin_m)`. One grid for a joint fit is right
   for one tone and wrong for the rest. The evidence is the RECOVERED MODEL, not
   the true-model chi-squared, which does not separate the two - see
-  `KNOWN_ISSUES.md` section 4 for both tables. The deepest interior interface is
+  `KNOWN_ISSUES.md` section 3 for both tables. The deepest interior interface is
   the pinned depth-window edge and is not fitted, so it is not snapped
   (`pin_last`).
 - **`C(f)` is COMPUTED, not fitted: `C = dx*dz*s(order)`.** The engine injects

@@ -29,7 +29,7 @@ that a 1D model has nothing to say about these components.
     python scripts/experiments/cross_coupling_geometry.py
     python scripts/experiments/cross_coupling_geometry.py --freq 2000
 
-The numbers this prints are the ones quoted in `KNOWN_ISSUES.md` section 5.
+The numbers this prints are the ones quoted in `KNOWN_ISSUES.md` section 4.
 """
 
 from __future__ import annotations

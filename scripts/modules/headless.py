@@ -46,6 +46,10 @@ from scripts.modules.fd import (
     update_cfg_values,
     update_modcfg_for_workshop,
 )
+# SOURCE_TYPE_CODES lives in `inversion`, not here: it is needed by the
+# inversion stager, which must stay importable without scipy/segyio. The
+# dependency runs headless -> inversion and must not be reversed.
+from scripts.modules.inversion import SOURCE_TYPE_CODES
 from scripts.modules.segy import (
     pad_resistivity_for_depth_margin,
     read_resistivity_from_segy,
@@ -59,11 +63,6 @@ from scripts.modules.survey import (
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "scripts" / "templates"
-
-# Source-field name -> the TE2D engine's numeric source_type (mod.cfg / inv.cfg
-# "1=EY 3=HX 5=HZ"; see rockem-suite gotchas - the codes are per-engine and
-# non-contiguous, so never hardcode the digit at a call site).
-SOURCE_TYPE_CODES = {"EY": 1, "HX": 3, "HZ": 5}
 
 
 @dataclass
@@ -1032,6 +1031,64 @@ def iter_datasets(out_root: Path | str) -> list[dict]:
     return []
 
 
+def joint_dataset_name(freq_hz: float | None, sources: Sequence[str]) -> str:
+    """Name for a group of datasets inverted together, e.g. f2000Hz_hx_hz.
+
+    Degenerates to `dataset_name` for one source, so a single-source workspace
+    keeps the directory names it already has.
+    """
+    srcs = [str(s).upper() for s in sources]
+    if len(srcs) == 1:
+        return dataset_name(freq_hz, srcs[0])
+    tag = "_".join(s.lower() for s in srcs)
+    return f"{'broadband' if freq_hz is None else f'f{freq_hz:.0f}Hz'}_{tag}"
+
+
+def group_datasets_by_frequency(
+    out_root: Path | str,
+    source_fields: Sequence[str] | None = None,
+) -> list[dict]:
+    """One entry per FREQUENCY, carrying every source recorded at it.
+
+    This is the unit a joint inversion acts on: `mpiEminvTE2d` now takes a
+    comma-separated `source_type`, so all of a frequency's sources go into ONE
+    run whose every model update sees all four tensor components. `iter_datasets`
+    still returns the (frequency, source) datasets themselves, which is the right
+    unit for forward modelling and calibration.
+
+    Each entry carries `name` (f2000Hz_hx_hz), `freq_hz`, `sources`,
+    `forward_dirs` ({source_field: Path}) and `meta` (the first source's - the
+    sources of a frequency share a grid, and `prepare_inversion_inputs` asserts
+    it). Ordered by frequency, lowest first, with sources in the order asked for.
+    """
+    entries = iter_datasets(out_root)
+    if not entries:
+        return []
+    by_freq: dict[Any, dict[str, dict]] = {}
+    for e in entries:
+        by_freq.setdefault(e.get("freq_hz"), {})[str(e["source_field"]).upper()] = e
+    wanted = [str(s).upper() for s in source_fields] if source_fields else None
+    groups = []
+    for f in sorted(by_freq, key=lambda v: (v is None, v)):
+        present = by_freq[f]
+        srcs = wanted if wanted is not None else sorted(present)
+        missing = [s for s in srcs if s not in present]
+        if missing:
+            raise ValueError(
+                f"Frequency {f} is missing forward dataset(s) for source(s) {missing}. "
+                f"Available: {sorted(present)}."
+            )
+        groups.append({
+            "name": joint_dataset_name(f, srcs),
+            "freq_hz": f,
+            "sources": list(srcs),
+            "forward_dirs": {s: Path(present[s]["run_dir"]) for s in srcs},
+            "meta": present[srcs[0]]["meta"],
+            "datasets": [present[s] for s in srcs],
+        })
+    return groups
+
+
 __all__ = [
     "DatasetPaths",
     "dataset_paths",
@@ -1041,7 +1098,9 @@ __all__ = [
     "build_forward_matrix",
     "build_per_frequency_forward_inputs",
     "dataset_name",
+    "group_datasets_by_frequency",
     "iter_datasets",
+    "joint_dataset_name",
     "matrix_setup",
     "load_manifest",
     "SetupParams",

@@ -47,6 +47,7 @@ from scripts.modules.multiscale_2d import (  # noqa: E402
     build_ladder, read_sg_grid, resample_model_log_rho, verify_roundtrip,
 )
 from scripts.modules.workshop_config import load_config  # noqa: E402
+from scripts.modules.workshop_report import latest_sg_up_file  # noqa: E402
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 
@@ -56,8 +57,14 @@ def prepare_stage(stage, *, previous_model: Path | None, initial_rho: float,
     """One stage's inversion directory, matched to its own forward run."""
     stage.run_dir.mkdir(parents=True, exist_ok=True)
     (stage.run_dir / "Local").mkdir(exist_ok=True)   # snapmethod=1 needs it to exist
+    # `Results/` is where `saveResults` writes every ACCEPTED model
+    # (`Results/sg_up.rss-<iter>`, inversionBase.h:28). The engine creates it on
+    # its own - measured - so this is only to have it present and inspectable
+    # before the run starts. What actually broke the ladder was
+    # `find_output_model` never LOOKING here; see its docstring.
+    (stage.run_dir / "Results").mkdir(exist_ok=True)
     created = prepare_inversion_inputs(
-        fdmodel_dir=stage.forward_dir,
+        fdmodel_dir=stage.forward_dirs,
         template_cfg=TEMPLATES / "inv.cfg",
         output_dir=stage.run_dir,
         max_iterations=stage.max_iterations,
@@ -71,7 +78,7 @@ def prepare_stage(stage, *, previous_model: Path | None, initial_rho: float,
     # The handoff: replace the uniform sg0 with the previous stage's model,
     # resampled onto THIS stage's grid, written where it can be inspected.
     if previous_model is not None:
-        report = resample_model_log_rho(previous_model, stage.forward_dir / "sg.rss",
+        report = resample_model_log_rho(previous_model, stage.reference_dir / "sg.rss",
                                         stage.run_dir / "sg0.rss")
         stage.resample_report = report
         stage.sg0_from = Path(previous_model)
@@ -84,7 +91,8 @@ def run_stage(stage, nproc: int) -> dict:
     cfg = load_config()
     engine = cfg.binary_path(cfg.inversion_engine_te2d())
     values = read_cfg_values(stage.run_dir / "inv.cfg")
-    print(f"[inv ] {stage.run_dir.name}: f={stage.freq_hz:.0f} Hz  order={values['order']} "
+    print(f"[inv ] {stage.run_dir.name}: f={stage.freq_hz:.0f} Hz  "
+          f"source_type={values['source_type']} order={values['order']} "
           f"lpml={values['lpml']} dtx={values['dtx']} tik={values['tik_sgregalpha']} "
           f"max_iter={values['max_iterations']} -np {nproc}", flush=True)
     t0 = time.perf_counter()
@@ -114,12 +122,24 @@ def model_error_vs_truth(model_path: Path, true_sg: Path) -> float:
 
 
 def find_output_model(run_dir: Path) -> Path | None:
-    """The inverted Sg the engine wrote (name varies with the build)."""
+    """The inverted Sg the engine wrote.
+
+    `Results/sg_up.rss-<iter>` is the real answer - that is where `saveResults`
+    puts every accepted model - so it is looked for FIRST, through the one
+    reader the notebooks and the report already use. The globs below it are the
+    legacy fallback for run directories written by older builds.
+    """
+    run_dir = Path(run_dir)
+    latest = latest_sg_up_file(run_dir)
+    if latest is not None:
+        return latest
+    staged = {"sg0.rss", "ep.rss", "wav2d.rss", "weight.rss",
+              "Sg_min.rss", "Sg_max.rss"}
     for pattern in ("*Sg*final*.rss", "*sg*final*.rss", "*Sg_*.rss", "*sg_*.rss", "*.rss"):
         hits = sorted(p for p in run_dir.glob(pattern)
-                      if "grad" not in p.name.lower() and p.name not in
-                      {"sg0.rss", "ep.rss", "wav2d.rss", "weight.rss",
-                       "Hx_data.rss", "Hz_data.rss", "Sg_min.rss", "Sg_max.rss"})
+                      if "grad" not in p.name.lower()
+                      and not p.name.endswith("_data.rss")
+                      and p.name not in staged)
         if hits:
             return hits[-1]
     return None
@@ -139,10 +159,13 @@ def main() -> int:
     ap.add_argument("--nproc", type=int, default=6)
     ap.add_argument("--no-joint", action="store_true")
     ap.add_argument("--sources", nargs="+", default=["HX"],
-                    help="source components to cascade within each frequency stage "
-                         "(e.g. --sources HX HZ). See build_ladder's docstring: this is a "
-                         "CASCADE, not a joint inversion - the engine takes one source_type "
-                         "per run.")
+                    help="source components to invert (e.g. --sources HX HZ)")
+    ap.add_argument("--source-mode", default="joint", choices=["joint", "cascade"],
+                    help="joint: ONE inversion per frequency over all --sources, gradients "
+                         "summed before the step (default). cascade: one run per "
+                         "(frequency, source), each starting from the previous model - for "
+                         "bisecting which source drives a result, or reproducing a "
+                         "pre-joint ladder.")
     ap.add_argument("--out", default="workspace/2D/inversion/multiscale_2d.json")
     args = ap.parse_args()
 
@@ -151,27 +174,33 @@ def main() -> int:
     stages = build_ladder(manifest, args.ladder_root, alpha_final=args.alpha_final,
                           max_iterations=args.max_iterations,
                           joint_final_stage=not args.no_joint,
-                          source_fields=tuple(s.upper() for s in args.sources))
+                          source_fields=tuple(s.upper() for s in args.sources),
+                          source_mode=args.source_mode)
     out: dict = {}
     outp = Path(args.out); outp.parent.mkdir(parents=True, exist_ok=True)
     if outp.exists():
         out = json.loads(outp.read_text())
 
     print("=== ladder ===")
-    print(f"{'stage':>24} {'f [Hz]':>8} {'src':>4} {'dx m':>6} {'dtx m':>7} "
+    print(f"{'stage':>24} {'f [Hz]':>8} {'src':>7} {'dx m':>6} {'dtx m':>7} "
           f"{'tik':>9} {'apertx m':>9}")
     for s in stages:
-        print(f"{s.run_dir.name:>24} {s.freq_hz:8.0f} {s.source_field:>4} {s.dx_m:6.2f} "
-              f"{s.dtx_m:7.2f} {s.tik_sgregalpha:9.4g} {s.apertx_m:9.2f}")
-    if len(set(s.source_field for s in stages)) > 1:
-        print("\n  NOTE: multiple source components cascade within each frequency - each")
-        print("  stage starts from the previous stage's model. That is NOT a joint")
-        print("  inversion: mpiEminvTE2d applies one source_type to every shot in a run,")
-        print("  so the gradients are not summed. See multiscale_2d.build_ladder.")
+        print(f"{s.run_dir.name:>24} {s.freq_hz:8.0f} {'+'.join(s.source_fields):>7} "
+              f"{s.dx_m:6.2f} {s.dtx_m:7.2f} {s.tik_sgregalpha:9.4g} {s.apertx_m:9.2f}")
+    if args.source_mode == "joint" and len(args.sources) > 1:
+        print("\n  JOINT: each stage inverts all of " + "+".join(s.upper() for s in args.sources)
+              + " in ONE run. The engine's work list spans")
+        print("  (shot x source type), so the gradients are summed before the step and every")
+        print("  model update sees all four tensor components. Cost is about the separate")
+        print("  single-source runs combined, not their product.")
+    elif len(args.sources) > 1:
+        print("\n  CASCADE: one run per (frequency, source), each starting from the previous")
+        print("  stage's model, so the last source of each frequency has the final say. This")
+        print("  is no longer forced by the engine - see --source-mode joint.")
 
     if "verify" in args.stage:
-        coarse = Path(stages[0].forward_dir) / "sg.rss"
-        fine = Path(stages[-1].forward_dir) / "sg.rss"
+        coarse = stages[0].reference_dir / "sg.rss"
+        fine = stages[-1].reference_dir / "sg.rss"
         rep = verify_roundtrip(fine, coarse, fine, Path(args.ladder_root) / "_verify")
         print("\n=== grid handoff verified on the KNOWN true model ===")
         print(f"  true ({rep['down']['src_dx']:.2f} m) -> coarse ({rep['down']['dst_dx']:.2f} m) "
@@ -201,7 +230,7 @@ def main() -> int:
                 prepared[-1]["output_model"] = str(mdl) if mdl else None
                 if mdl:
                     prepared[-1]["model_err_vs_truth"] = model_error_vs_truth(
-                        mdl, Path(s.forward_dir) / "sg.rss")
+                        mdl, s.reference_dir / "sg.rss")
                     prev = mdl
                     print(f"       model error vs truth: "
                           f"{prepared[-1]['model_err_vs_truth']:.4f} decades", flush=True)

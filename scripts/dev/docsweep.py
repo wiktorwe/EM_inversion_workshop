@@ -64,6 +64,12 @@ ALLOW = {
     "utils.check_ab", "check_ab",
     # upstream rockem-suite symbols and inv.cfg keys, and the repo itself
     "InversionEmTE2D", "max_linesearch", "EM_inversion_workshop",
+    # inv.cfg record/weight keys - config keys the engine reads, not Python names
+    "Recordfile_HX", "Recordfile_HZ", "Recordfile_EY",
+    "Recordfile_HX_HX", "Recordfile_HX_HZ", "Recordfile_HZ_HX", "Recordfile_HZ_HZ",
+    "Dataweightfile", "Dataweightfile_HX", "Dataweightfile_HZ", "source_type",
+    # upstream C++ methods named when explaining what the engine does
+    "saveResults", "runGrad", "runGrad_adi", "stackImage",
     "differential_evolution", "dual_annealing", "nbformat", "ast",
 }
 PAST_MARKERS = re.compile(

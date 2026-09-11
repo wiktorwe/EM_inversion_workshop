@@ -621,7 +621,7 @@ def component_weights(cfg):
     property of the GEOMETRY, not of the 1D model, which produces them at full
     size as soon as the receivers leave the source depth
     (`scripts/experiments/cross_coupling_geometry.py`, `KNOWN_ISSUES.md`
-    section 5). Weighting by receiver ties `Cxx` to `Czx` and `Cxz` to `Czz`,
+    section 4). Weighting by receiver ties `Cxx` to `Czx` and `Cxz` to `Czz`,
     so neither suppressed component can be downweighted without dragging a
     co-component with it - the one adjustment this knob exists to make is the
     one it could not express.

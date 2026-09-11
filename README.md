@@ -316,9 +316,13 @@ The per-dataset **Run modelling**, **Calibrate (homogeneous)** and **Calibrate
 component selector have all been removed. The `dataset` dropdowns that remain
 change only *what you look at*, never what runs.
 
-The 2D inversion runs are sequential rather than joint because `mpiEminvTE2d`
-applies a single `source_type` per run — but that is one action over the whole
-matrix, not a choice you make dataset by dataset.
+The 2D inversion runs one JOINT inversion per frequency: `mpiEminvTE2d` takes a
+comma-separated `source_type`, so its work list spans (shot × source type) and
+the Kx and Kz gradients are summed before the model is stepped. A 4-component
+acquisition is therefore one inversion whose every model update sees all four
+components, not two runs where the second overwrites the first's answer. The
+sequence over frequencies is one action over the whole matrix, not a choice you
+make dataset by dataset.
 
 The historical layout is preserved exactly: one broadband run with a single
 source still writes straight into `workspace/2D/forward/` with
@@ -327,9 +331,9 @@ and older workspaces keep loading.
 
 Step 05 consumes the **whole** matrix: every per-frequency dataset contributes
 the one tone it was designed for, both sources contribute their two tensor
-components, and the inversion fits them together. Steps 03, 04 and 06 work on
-one dataset at a time by nature — staging a single FWI run, or looking at one
-result.
+components, and the inversion fits them together. Step 03 consumes it a
+frequency at a time, both sources at once. Steps 04 and 06 look at one result at
+a time by nature.
 
 Each per-frequency dataset has its own grid and so its own calibration, and
 Step 05 assembles C per frequency to match. Worth knowing when reading those
@@ -339,9 +343,29 @@ measured 2.61 / 1.95 / 0.90 / 0.64 at 1/2/4/6 kHz purely because dx is
 1 kHz, and the 6 kHz same-grid control reproduces the broadband value to
 0.001 %.
 
-Inverting the full tensor jointly in 2D is a separate matter: `mpiEminvTE2d`
-applies a single `source_type` to every shot in a run, so joint multi-source FWI
-needs that value to become per-shot upstream in rockem-suite.
+Inverting the full tensor jointly in 2D is what Step 03 now does.
+`source_type = "3,5"` makes the run joint, and the four observed gathers are
+named per (source, receiver): `Recordfile_HX_HZ` is Hz recorded from a Kx
+source. Two things follow. Every record file must share a trace count, trace
+order, per-trace coordinates and time axis — the engine builds ONE shot keymap
+from the first and `apertx > 0` is a source-centred total width, so it checks
+this at startup and aborts naming the offending file and trace index. And the
+cost is about what the separate single-source runs cost combined, roughly 2×
+one source rather than 4×, because both receiver components already come from
+one propagation per (shot, source).
+
+The acceptance test is `scripts/experiments/joint_source_gradient.py`: on a tiny
+dedicated model it checks that the joint gradient equals the sum of the two
+single-source gradients (measured **4.4e-08** relative L2, against a 1e-05
+tolerance — round-off, because `Image2D::stackImage` accumulates in float), that
+the misfit totals agree exactly, that single-source runs are untouched, and that
+`t(joint) / (t(Kx) + t(Kz))` stays under 1.25 (measured 0.95-0.98).
+
+The same identity was checked once at production scale, off-script: 2 kHz,
+30 shots, `order = 6`, `lpml = 13`, `apertx = 110.6 m`, `constrain = true`,
+`max_iterations = 0`, `-np 6`. Relative L2 **1.01e-07**, misfit totals equal to
+the last digit, and `misfit.rss` 30 + 30 -> **60** entries. The identity does
+not depend on shot count, so the committed test uses the tiny model.
 
 ### Extraction window must exclude the source ramp-up
 

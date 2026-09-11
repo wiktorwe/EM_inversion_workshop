@@ -105,7 +105,10 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   `verify_roundtrip`, which checks the operator on the known true model first)
   and the schedules (`stage_knot_spacing` scales the B-spline `dtx`/`dtz` with
   skin depth; `stage_regularisation` relaxes the Tikhonov weight as frequency
-  rises, anchored so the final stage matches the single-stage baseline).
+  rises, anchored so the final stage matches the single-stage baseline). A stage
+  is plural over sources (`source_fields`, `forward_dirs`), so `source_mode=
+  "joint"` puts a frequency's Kx and Kz data in ONE run and their gradients sum
+  before the step.
 - `headless.py`: non-GUI drivers for the Step 01/02 pipeline
   (`SetupParams`, `build_forward_inputs`, `build_per_frequency_forward_inputs`,
   `run_forward`, `run_calibration`). Every numerical decision is delegated to
@@ -128,7 +131,7 @@ This folder is the module-oriented script codebase used by the GUI notebooks
 - `survey.cfg`: survey template copied to a temp workspace.
 - `mod.cfg`: 2D forward-modelling config template (explicit TE2D engine).
 - `mod3d.cfg`: 3D forward-modelling config template (ADI path - unvalidated,
-  see `KNOWN_ISSUES.md` section 7).
+  see `KNOWN_ISSUES.md` section 6).
 - `inv.cfg`: 2D inversion config template (explicit TE2D engine).
 - `runmod.sh` / `runinv.sh`: run scripts invoking the explicit TE2D engine at
   `$ROCKEM_SUITE_ROOT/bin` (CPU: `mpiEmmodTE2d` / `mpiEminvTE2d`; GPU:
@@ -184,8 +187,25 @@ confirms or falsifies it; none of them are imported by the notebooks.
 - `interface_snapping.py`: how far half a cell of interface quantisation moves
   the data, against the analytic error budget - the evidence for and against
   turning `unpack_model_params(snap_dz=...)` on.
-- `multiscale_2d_run.py`: driver for the 2D frequency ladder. See
-  `KNOWN_ISSUES.md` for why the head-to-head it exists for has not been run.
+- `multiscale_2d_run.py`: driver for the 2D frequency ladder. `--source-mode
+  joint` (the default) makes each stage ONE inversion over all `--sources`;
+  `--source-mode cascade` is the old one-run-per-(frequency, source) behaviour,
+  kept for bisecting which source drives a result and for reproducing a
+  pre-joint ladder. See `KNOWN_ISSUES.md` for why the head-to-head it exists for
+  has not been run.
+- `joint_source_gradient.py`: the acceptance test for joint multi-source FWI.
+  Builds a tiny dedicated model, stages three inversions through
+  `inversion.prepare_inversion_inputs` (`source_type` `"3"`, `"5"`, `"3,5"`) at
+  `max_iterations = 0`, and checks that the joint gradient is the sum of the two
+  single-source ones. A few minutes; run it after touching anything in the
+  staging chain.
+- `dev/tensorsweep.py`: the 4-COMPONENT chain check. A joint run puts Cxx, Cxz,
+  Czx and Czz in ONE directory, so Step 04's source axis decides which quarter of
+  the tensor is read. A reader that silently returns the Kx pair is not a
+  NameError, a failed exec, a bad path or a false sentence, so `handlersweep`,
+  `bugsweep`, `chainsweep` and `docsweep` all pass while the panel plots Cxx
+  under a Czx label. Run it with the other sweeps after touching anything that
+  reads observed or modelled data.
 - `tensor_1d_test.py`: does the 1D inversion work with all four tensor
   components? Checks the TRUE model against the FDTD data first - if the truth
   does not fit, nothing downstream means anything - then inverts from a uniform

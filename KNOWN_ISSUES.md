@@ -24,27 +24,7 @@ change invalidates, and move on. See "THE WORKSPACE IS DISPOSABLE" in the skill.
 
 ---
 
-## 1. Joint multi-source 2D FWI is not possible with the current engine
-
-**Status: engine limitation, upstream.**
-
-`mpiEminvTE2d` parses `source_type` as a single `int` and stores it as one
-scalar on `InversionEmTE2D`. The `switch` that applies it already sits INSIDE
-the per-shot loop (`lib/inversion/inversionEmTE2D.cpp:362`) but reads that
-global, so every shot in a run gets the same source type.
-
-`multiscale_2d.build_ladder(source_fields=...)` therefore CASCADES over sources
-(Kx stage, then Kz stage starting from its model) rather than inverting them
-jointly. A joint inversion would sum the Kx and Kz gradients before stepping; a
-cascade lets the last source have the final say.
-
-**Fix:** make `sourcetype` per-shot upstream in rockem-suite (read it from the
-survey/data file, or accept a comma list indexed by shot). Small and localised -
-the loop structure is already right.
-
----
-
-## 2. The 2D multi-scale head-to-head has never been run
+## 1. The 2D multi-scale head-to-head has never been run
 
 **Status: not run, deliberately, with the cost measured.**
 
@@ -62,9 +42,24 @@ converges, so none is reported.
 **Related:** the 1-iteration cost run in `workspace/2D/inversion/ladder_1iter/`
 was killed part-way and its outputs are incomplete.
 
+**Also fixed while wiring joint multi-source FWI in: the ladder could not
+chain.** The engine writes accepted models to `Results/sg_up.rss-<iter>`
+(`saveResults`, `inversionBase.h:28`), but `multiscale_2d_run.find_output_model`
+globbed the run directory NON-RECURSIVELY, so it never looked in `Results/`. It
+returned `None`, `prev` never advanced, and the ladder would have run as N
+independent inversions from the uniform start model. It now goes through
+`workshop_report.latest_sg_up_file`, the same reader the notebooks use.
+
+Measured while checking this, because the obvious guess is wrong: the engine
+CREATES `Results/` itself when it first saves a model - a run directory without
+it produces `Results/sg_up.rss-1` exactly like one with it. `Local/` is likewise
+not the problem: the template sets `incore = "true"`, so the checkpoints stay in
+memory and `Snapfile` is never written. Neither directory has to be staged, and
+the missing-model symptom was the reader alone.
+
 ---
 
-## 3. BlockInv converges to a local minimum far from the global one
+## 2. BlockInv converges to a local minimum far from the global one
 
 **Status: measured, and it is not a budget problem.**
 
@@ -93,7 +88,7 @@ multi-start it. Neither is done.
 
 ---
 
-## 4. The 1D inversion's depth resolution is limited by the FD grid, not by noise
+## 3. The 1D inversion's depth resolution is limited by the FD grid, not by noise
 
 **Status: the two mechanical errors are fixed and measured; what is left is a
 property of the discretisation.**
@@ -165,7 +160,7 @@ about it). Neither limits this survey - chi2 0.03 is far inside the noise floor
 
 ---
 
-## 5. The survey reads the cross-couplings on their null
+## 4. The survey reads the cross-couplings on their null
 
 **Status: measured. The cure is an acquisition change, so it is left to the
 user.**
@@ -240,7 +235,7 @@ components are suppressed here, they carry little 1D information, and what is
 in them is mostly NOT 1D - which is exactly why `experiments/lookahead.py` uses
 them to see the fault ahead of the bit. Giving the receivers a few metres of
 depth offset would make them full-sized 1D observables, and would remove the
-lopsided quantisation floor in section 8 at the same time. Nothing in the
+lopsided quantisation floor in section 7 at the same time. Nothing in the
 workshop forbids it: `forward_1d_gains` takes per-receiver depths, and the
 analytic and FDTD paths both handle it.
 
@@ -252,7 +247,7 @@ the budget already gives every component its right weight.
 
 ---
 
-## 6. The GUI manual describes an older version of the workshop
+## 5. The GUI manual describes an older version of the workshop
 
 **Status: stale, deliberately not updated yet.**
 
@@ -276,7 +271,7 @@ Until then the notebooks point at `README.md`, which is current.
 
 ---
 
-## 7. The 3D / ADI path is unvalidated
+## 6. The 3D / ADI path is unvalidated
 
 **Status: parses, never checked.**
 
@@ -286,7 +281,7 @@ path.
 
 ---
 
-## 8. The reported Cxz-vs-Czx look-ahead distances predate the current threshold
+## 7. The reported Cxz-vs-Czx look-ahead distances predate the current threshold
 
 **Status: the threshold is fixed in code; the numbers need re-running.**
 
@@ -318,12 +313,12 @@ The new floors, on the production grids:
 The ratio collapses to 2-3x at the top of the band, but at 1 kHz - the tone the
 112 m / 76 m comparison was made at - it is 50x, no better than the 41x it
 replaces. The reason is no longer a fitted null but a physical one: Hz at zero
-depth offset IS the near-null of section 5, so a half-cell interface move
+depth offset IS the near-null of section 4, so a half-cell interface move
 changes it by a much larger FRACTION than it changes Hx. A derived floor
 reports that honestly instead of hiding it, but it cannot remove it.
 
 **So the Cxz-vs-Czx comparison is still not fair at low frequency**, and the fix
-is the one section 5 names: give the receivers a depth offset. That removes the
+is the one section 4 names: give the receivers a depth offset. That removes the
 null and the lopsided floor together. Comparing the two couplings at 4-6 kHz is
 sound in the meantime.
 
@@ -333,7 +328,7 @@ machine (see the timing note in `lookahead.py`); nothing else blocks it.
 
 ---
 
-## 9. The FITTED calibration path is sensitive to its reference Earth
+## 8. The FITTED calibration path is sensitive to its reference Earth
 
 **Status: measured. Affects the `calibration_source="fitted"` escape hatch only,
 not the inversion.**
