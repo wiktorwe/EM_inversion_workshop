@@ -47,6 +47,7 @@ from scripts.modules.inversion import (  # noqa: E402
     available_synthetic_pairs, find_observed_records, read_cfg_values,
     source_fields_from_cfg, staged_record_name,
 )
+from scripts.modules.multiscale_2d import iter_stages, list_run_dirs  # noqa: E402
 from scripts.modules.workshop_config import load_config  # noqa: E402
 
 RECEIVERS = ("HX", "HZ")
@@ -65,20 +66,22 @@ def ok(msg: str) -> None:
 
 
 def find_joint_run() -> Path | None:
-    """The newest joint run that the ENGINE has actually written output into.
+    """The newest joint SCALE directory the ENGINE has written output into.
 
-    A run staged but never executed has the four record files and no
-    `data_mod_*`, and checking its modelled data would report a failure that is
-    really just "this run has not been run". Executed runs are preferred; if
-    none exists the newest staged one is returned, and the modelled-data checks
-    report SKIP rather than FAIL.
+    A ladder's engine cwd is `Run{N}/<freq>/`, not the Run root. A stage
+    staged but never executed has the four record files and no `data_mod_*`;
+    executed stages are preferred. If none exists the newest staged joint
+    scale is returned, and the modelled-data checks report SKIP.
     """
     runs_root = Path(load_config().inv_2d_runs_dir)
     if not runs_root.exists():
         return None
-    cands = [d for d in runs_root.iterdir()
-             if d.is_dir() and (d / "inv.cfg").exists()
-             and len(source_fields_from_cfg(d)) > 1]
+    cands: list[Path] = []
+    for _, ladder in list_run_dirs(runs_root):
+        for st in iter_stages(ladder):
+            d = Path(st["path"])
+            if (d / "inv.cfg").exists() and len(source_fields_from_cfg(d)) > 1:
+                cands.append(d)
     if not cands:
         return None
     executed = [d for d in cands if any(d.glob("data_mod_*.rss*"))]
@@ -172,6 +175,14 @@ def check_notebook_04(run_dir: Path, sources: list[str]) -> None:
             if c["cell_type"] == "code":
                 exec(compile("".join(c["source"]), "<nb04>", "exec"), g)
 
+    ladder = run_dir.parent
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        g["refresh_run_options"]()
+        g["run_selector"].value = str(ladder)
+        g["refresh_scale_options"]()
+        g["scale_selector"].value = str(run_dir)
+        g["refresh_view_combos"]()
+
     tx_x, _, rx_x, _ = g["_extract_positions"](run_dir)
     if tx_x.size == 0 or rx_x.size == 0:
         fail("Step 04 resolves NO TX/RX positions in the joint run "
@@ -202,20 +213,22 @@ def check_notebook_04(run_dir: Path, sources: list[str]) -> None:
 
 
 def check_run_model_link() -> None:
-    """Does each Step select the true model / grid of the RUN, not of dataset 0?
+    """Does each Step select the true model / grid of the SCALE, not dataset 0?
 
     Every frequency is modelled on its own grid, so `sg.rss` is a different
     array per dataset. Step 03 plots the true model beside the inversion and
-    takes its colour limits from it; Step 04 takes the extraction tone and
-    `ep.rss` from the view. Both must follow the selected run, and neither is a
-    name, a path binding or a sentence, so no other sweep sees it.
+    takes its colour limits from it; Step 04 rebinds `DS` from the selected
+    scale. Both must follow the selected stage.
     """
-    runs = [d for d in Path(load_config().inv_2d_runs_dir).glob("Run*")
-            if (d / "dataset.txt").exists()]
-    if not runs:
-        print("SKIP  no Run*/dataset.txt to check the run->model link against")
+    ladders = [p for _, p in list_run_dirs(load_config().inv_2d_runs_dir)]
+    stages = []
+    for ladder in ladders:
+        for st in iter_stages(ladder):
+            if (st["path"] / "dataset.txt").exists():
+                stages.append((ladder, st))
+    if not stages:
+        print("SKIP  no ladder stages with dataset.txt to check the run->model link against")
         return
-    runs = sorted(runs, key=lambda d: d.name)
 
     buf = io.StringIO()
     g3, g4 = {}, {}
@@ -231,20 +244,23 @@ def check_run_model_link() -> None:
                     exec(compile("".join(c["source"]), f"<{nbname}>", "exec"), g)
 
     bad = 0
-    for r in runs:
-        tag = (r / "dataset.txt").read_text().strip().split("Hz")[0]
+    for ladder, st in stages:
+        tag = (st["path"] / "dataset.txt").read_text().strip().split("Hz")[0]
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            tm3 = g3["run_true_model"](r)
-            g4["run_selector"].options = [(d.name, str(d)) for d in runs]
-            g4["run_selector"].value = str(r)
+            tm3 = g3["run_true_model"](st["path"])
+            g4["refresh_run_options"]()
+            g4["run_selector"].value = str(ladder)
+            g4["refresh_scale_options"]()
+            g4["scale_selector"].value = str(st["path"])
+            g4["on_scale_selected"]({"name": "value", "new": str(st["path"])})
             tm4 = g4["DS"].sg
         for step, tm in (("03", tm3), ("04", tm4)):
             if tag not in tm.parent.name:
-                fail(f"Step {step}: run {r.name} ({tag}Hz) reads true model "
+                fail(f"Step {step}: scale {st['path'].name} ({tag}Hz) reads true model "
                      f"{tm.parent.name}/sg.rss")
                 bad += 1
     if not bad:
-        ok(f"run -> true model: all {len(runs)} runs read their own dataset in Steps 03 and 04")
+        ok(f"run -> true model: all {len(stages)} scales read their own dataset in Steps 03 and 04")
 
 
 def main() -> int:

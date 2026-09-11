@@ -147,7 +147,7 @@ workspace/
     forward/              # FD model, mod.cfg, shot gathers (from step 01–02)
     inversion/
       input/              # prepared 2D inversion inputs (step 03)
-      Run{N}/             # 2D inversion runs (step 03)
+      Run{N}/             # Step 03: one multi-scale ladder (subdir per frequency)
     results/Run{N}/       # SEG-Y exports from step 04
   1D/
     inversion/Run{N}/     # 1D inversion runs (step 05)
@@ -178,12 +178,12 @@ Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
 
 3. **Step 03 — 2D inversion**
    - Generate inversion inputs.
-   - Start the frequency-ladder inversion (lowest first; each later frequency
-     starts from the previous inverted model) and monitor progress.
+   - Start one frequency-ladder inversion (one `Run{N}/` containing every
+     frequency as a subdirectory; lowest first; each later scale starts from
+     the previous inverted model) and monitor progress.
 
 4. **Step 04 — 2D inversion results**
-   - Compare models and data (freqs / `n_periods` from setup metadata).
-   - Export outputs as needed.
+   - Pick the ladder and the scale, compare models and data, export SEG-Y.
 
 5. **Steps 05–06 — 1D inversion and results**
    - Step 05 defaults freqs / `n_periods` / rho bounds from setup metadata; each run writes `REPORT.md`.
@@ -324,7 +324,8 @@ acquisition is therefore one inversion whose every model update sees all four
 components, not two runs where the second overwrites the first's answer. The
 sequence over frequencies is a ladder, one action over the whole matrix: lowest
 frequency first, each later frequency starting from the previous inverted
-model resampled onto its own grid.
+model resampled onto its own grid. One click of Run inversion writes one
+`Run{N}/` with a subdirectory per frequency (`ladder.json` at the Run root).
 
 The historical layout is preserved exactly: one broadband run with a single
 source still writes straight into `workspace/2D/forward/` with

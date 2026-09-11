@@ -116,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_1d=args.run_1d,
                 dataset=name,
                 compile_pdf_flag=bool(args.compile),
+                match_2d_to_dataset=bool(args.all_datasets),
             ))
         except FileNotFoundError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)

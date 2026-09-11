@@ -484,14 +484,173 @@ def handoff_starting_model(
     return resample_model_log_rho(previous_model, template_sg, dest_sg0)
 
 
+# ---------------------------------------------------------------------------
+# GUI / report layout: one Run{N} is one ladder, engine cwd is a scale subdir
+# ---------------------------------------------------------------------------
+LADDER_MANIFEST = "ladder.json"
+RUN_DIR_PATTERN = re.compile(r"^Run(\d+)$")
+
+
+def list_run_dirs(root_dir: Path | str) -> list[tuple[int, Path]]:
+    """`Run{N}` directories under the inversion root, sorted by N."""
+    root = Path(root_dir)
+    if not root.exists():
+        return []
+    out: list[tuple[int, Path]] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        m = RUN_DIR_PATTERN.match(child.name)
+        if m:
+            out.append((int(m.group(1)), child))
+    out.sort(key=lambda item: item[0])
+    return out
+
+
+def allocate_ladder_run(root_dir: Path | str) -> Path:
+    """The next unused `Run{N}` directory, created empty."""
+    used = {idx for idx, _ in list_run_dirs(root_dir)}
+    idx = 0
+    while idx in used:
+        idx += 1
+    path = Path(root_dir) / f"Run{idx}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def stage_cwd(run_dir: Path | str, group_name: str) -> Path:
+    """Engine working directory for one frequency of a ladder."""
+    return Path(run_dir) / str(group_name)
+
+
+def empty_ladder_manifest(*, source_fields: Sequence[str]) -> dict:
+    return {
+        "kind": "multiscale_2d",
+        "source_fields": [str(s).upper() for s in source_fields],
+        "stages": [],
+    }
+
+
+def write_ladder_manifest(run_dir: Path | str, manifest: dict) -> Path:
+    path = Path(run_dir) / LADDER_MANIFEST
+    Path(run_dir).mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    return path
+
+
+def read_ladder_manifest(run_dir: Path | str) -> dict:
+    path = Path(run_dir) / LADDER_MANIFEST
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{path} is missing; a 2D inversion run is a ladder with this "
+            "manifest at the Run root, and each frequency lives in a subdir."
+        )
+    return json.loads(path.read_text())
+
+
+def iter_stages(run_dir: Path | str) -> list[dict]:
+    """Stage records from `ladder.json` only.
+
+    A directory without the manifest is not a run: this returns []. Each
+    record has `index`, `freq_hz`, `name`, `dir` (relative), `path` (absolute),
+    `sg0_from`, `status`, and the ladder's `source_fields`.
+    """
+    path = Path(run_dir) / LADDER_MANIFEST
+    if not path.exists():
+        return []
+    man = json.loads(path.read_text())
+    fields = [str(s).upper() for s in (man.get("source_fields") or [])]
+    out: list[dict] = []
+    for s in man.get("stages") or []:
+        rec = dict(s)
+        rec["path"] = Path(run_dir) / str(rec["dir"])
+        rec["source_fields"] = list(fields)
+        out.append(rec)
+    return out
+
+
+def upsert_stage(run_dir: Path | str, stage: dict) -> dict:
+    """Insert or replace one stage in `ladder.json` by `index`."""
+    run_dir = Path(run_dir)
+    man_path = run_dir / LADDER_MANIFEST
+    if man_path.exists():
+        man = json.loads(man_path.read_text())
+    else:
+        man = empty_ladder_manifest(source_fields=stage.get("source_fields") or [])
+    stored = {
+        "index": int(stage["index"]),
+        "freq_hz": float(stage["freq_hz"]),
+        "name": str(stage["name"]),
+        "dir": str(stage["dir"]),
+        "sg0_from": stage.get("sg0_from") or "uniform",
+        "status": str(stage.get("status") or "running"),
+    }
+    stages = list(man.get("stages") or [])
+    replaced = False
+    for i, existing in enumerate(stages):
+        if int(existing.get("index", -1)) == stored["index"]:
+            stages[i] = stored
+            replaced = True
+            break
+    if not replaced:
+        stages.append(stored)
+    stages.sort(key=lambda s: int(s["index"]))
+    man["stages"] = stages
+    if stage.get("source_fields") and not man.get("source_fields"):
+        man["source_fields"] = [str(s).upper() for s in stage["source_fields"]]
+    write_ladder_manifest(run_dir, man)
+    return man
+
+
+def ladder_run_label(run_dir: Path | str) -> str:
+    """`Run3 · 2000, 4000, 6000 Hz · joint`."""
+    run_dir = Path(run_dir)
+    stages = iter_stages(run_dir)
+    if not stages:
+        return run_dir.name
+    freqs = ", ".join(f"{float(s['freq_hz']):g}" for s in stages)
+    fields = stages[0].get("source_fields") or []
+    if len(fields) > 1:
+        tag = "joint"
+    elif fields:
+        tag = str(fields[0]).lower()
+    else:
+        tag = ""
+    suffix = f" · {tag}" if tag else ""
+    return f"{run_dir.name} · {freqs} Hz{suffix}"
+
+
+def stage_label(stage: dict, previous: dict | None = None) -> str:
+    """`2000 Hz (uniform start)` / `4000 Hz (from 2000 Hz)`."""
+    f = float(stage["freq_hz"])
+    src = stage.get("sg0_from") or "uniform"
+    if src == "uniform":
+        return f"{f:g} Hz (uniform start)"
+    if previous is not None:
+        return f"{f:g} Hz (from {float(previous['freq_hz']):g} Hz)"
+    return f"{f:g} Hz (from {src})"
+
+
 __all__ = [
+    "LADDER_MANIFEST",
+    "RUN_DIR_PATTERN",
     "Stage",
+    "allocate_ladder_run",
     "build_ladder",
+    "empty_ladder_manifest",
     "find_output_model",
     "handoff_starting_model",
+    "iter_stages",
+    "ladder_run_label",
+    "list_run_dirs",
+    "read_ladder_manifest",
     "read_sg_grid",
     "resample_model_log_rho",
+    "stage_cwd",
     "stage_knot_spacing",
+    "stage_label",
     "stage_regularisation",
+    "upsert_stage",
     "verify_roundtrip",
+    "write_ladder_manifest",
 ]

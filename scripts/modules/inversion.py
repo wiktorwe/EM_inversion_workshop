@@ -517,11 +517,11 @@ def apply_inversion_controls(
 ) -> Dict[str, str]:
     """Write the live inversion knobs into an already-staged `inv.cfg`.
 
-    Staging copies `input/<freq>/inv.cfg` into `Run{N}/`. The GUI knobs that
-    feed those keys must be applied HERE, at launch, because Generate Inputs
-    can have been clicked with different values. Copying the staged file
+    Staging copies `input/<freq>/inv.cfg` into the scale subdirectory. The GUI
+    knobs that feed those keys must be applied HERE, at launch, because Generate
+    Inputs can have been clicked with different values. Copying the staged file
     unchanged is what makes Max iter look like a dummy: the engine reads
-    `Run{N}/inv.cfg`, not the widget.
+    that scale's `inv.cfg`, not the widget.
     """
     updates = {
         "max_iterations": str(int(max_iterations)),

@@ -365,7 +365,8 @@ same edit that caused it:
 | Replaced the per-notebook path globals with one `DS` | `chainsweep.py` only walked bare `Path` globals, so it would have reported PASS on a notebook whose every artifact was root-bound | when you change the SHAPE of what a check inspects, change the check in the same edit - a check that cannot see its subject reads as evidence |
 | Made Step 05's features load on a matrix | `handlersweep.py` then actually reached `on_tune_de_budget`, a real 174 s DE run, and the sweep timed out | a sweep that calls every handler must BOUND the ones that optimise - `handlersweep` now patches the tuners to a single tiny budget rather than skipping them, because the lambda tuner is exactly the handler that shipped a bug |
 | Added per-frequency interface snapping | the empymod fallback branch still forwarded the UNSNAPPED thickness, silently modelling a different Earth than the main path | follow the new argument into every branch, including error paths - this is the second time that exact branch has been missed |
-| Rebuilt the view selectors | assigning `view_combo.value` fires NOTHING when the value is unchanged, so after a batch that walked every dataset the selector showed combination 0 while `DS` pointed at the last one | a widget handler is not a resync; call it explicitly after rebuilding options |
+| Made each 2D `Run{N}` one frequency | Step 04 listed Run0/Run1/Run2 with no tone or ladder, and the report compared the latest Run to the first forward dataset | a ladder is one attempt: `find_next_run_dir` was inside the frequency loop and `dataset.txt` lived at the Run root |
+| Made each 2D `Run{N}` a multi-scale ladder (`ladder.json` + scale subdirs) | Step 04 still listed folder names, progress parsers looked at the Run root, the report took `sg_up` at that root, tensorsweep looked for `inv.cfg` there | `iter_stages` is the one reader; no `inv.cfg`-at-root fallback; old one-frequency trees were deleted rather than dual-format |
 
 ### Duplication is how chains rot
 
@@ -568,18 +569,21 @@ previous one; every arrow is a place a change can break something.
   previous inverted model (`Results/sg_up.rss-<iter>`), resampled onto this
   frequency's own grid by `multiscale_2d.handoff_starting_model`. Staging writes
   a uniform `sg0.rss` into every `input/<freq>_hx_hz/`; that is the
-  first-frequency start. The run worker overwrites `Run{N}/sg0.rss` before each
-  later frequency starts - copying the staged uniform `sg0` unchanged makes N
-  independent inversions that only look like a ladder. A failed or model-less
-  stage stops the batch, because later frequencies have nothing to start from.
-  Inputs go to `inversion/input/<freq>_hx_hz/`, each run records its group in
-  `Run{N}/dataset.txt`, and Stop halts the whole batch rather than letting the
-  next frequency start. `headless.group_datasets_by_frequency` is the one
-  grouping, shared with `multiscale_2d.build_ladder`.
+  first-frequency start. One click of Run inversion allocates one `Run{N}/`
+  and puts each frequency in a subdirectory that is the engine cwd; `ladder.json`
+  at the Run root lists the stages. The run worker overwrites
+  `Run{N}/<freq>/sg0.rss` before each later frequency starts - copying the
+  staged uniform `sg0` unchanged makes N independent inversions that only look
+  like a ladder. A failed or model-less stage stops the batch, because later
+  frequencies have nothing to start from. Inputs go to
+  `inversion/input/<freq>_hx_hz/`, each scale records its group in
+  `Run{N}/<freq>/dataset.txt`, and Stop halts the whole batch rather than
+  letting the next frequency start. `headless.group_datasets_by_frequency` is
+  the one grouping, shared with `multiscale_2d.build_ladder`.
 - **key chain fact** Max iter, geps, apertx, dtx, dtz and Tikhonov are written
-  into `Run{N}/inv.cfg` at launch by `inversion.apply_inversion_controls`, from
+  into `Run{N}/<freq>/inv.cfg` at launch by `inversion.apply_inversion_controls`, from
   the live widgets. Staging copies `input/<freq>/inv.cfg`; leaving that copy
-  unchanged is what makes Max iter look dummy - the engine reads the run
+  unchanged is what makes Max iter look dummy - the engine reads the scale
   directory, not the widget. There is no per-frequency iteration picker: one
   cap for every scale. `geps` (gradient L2-norm, the GNORM column) is the
   scale-local stop; `0` disables it because gnorm is always > 0. The engine
@@ -591,7 +595,7 @@ previous one; every arrow is a place a change can break something.
   `Results/`, and the observed records - `Hx_data.rss`/`Hz_data.rss` for ONE
   source, `Hx_Hx_data.rss` ... `Hz_Hz_data.rss` (one per source x receiver) for
   a joint run. `inversion.find_observed_records` is the one reader for both
-  forms; do not hardcode either.
+  forms; do not hardcode either. The Run root also carries `ladder.json`.
 - **key chain fact** `prepare_inversion_inputs` PINS `order`, `lpml` and `pml_*`
   from the forward `mod.cfg`, and every forward run in a joint group must agree
   on them (they share one `inv.cfg`, so one grid, stencil and PML). Anything the
@@ -602,14 +606,16 @@ previous one; every arrow is a place a change can break something.
   loudly rather than fitting Kz data with a Kx source.
 
 ### Step 04 - 2D results
-- **imports** `fd_visualization`, `headless`, `rockem_bridge`, `segy`, `setup_defaults`
+- **imports** `fd_visualization`, `headless`, `inversion`, `multiscale_2d`, `rockem_bridge`, `segy`, `setup_defaults`
 - **reads** `Run{N}/` models + the forward data + `setup_metadata.json`
   (frequencies, `n_periods_extract`, SEG-Y template geometry)
 - **writes** `workspace/2D/results/Run{N}/` SEG-Y exports
-- **key chain fact** it has TWO code cells - setup and GUI. `_select_dataset`
-  is defined in the first and the `view` dropdown in the second; both run in one
-  namespace under Voila. The dropdown's (frequency, source) half rebinds `DS`,
-  so the model plots follow it too; its receiver half selects the gather drawn.
+- **key chain fact** it has TWO code cells - setup and GUI. Shared chrome is
+  the ladder (`Run:`) and the scale (frequency of that ladder). Tabs split
+  Models from Data so the view selector sits next to the gather plot. Scale
+  rebinds `DS` to that tone's forward group; the view dropdown is source x
+  receiver at that frequency only. Export writes
+  `workspace/2D/results/Run{N}/<stage>/`.
 
 ### Step 05 - 1D layered inversion
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
@@ -661,7 +667,10 @@ workspace and writes `workspace/report/workflow_report.tex` + figures. It reads
 `setup_metadata.json` and the calibration, so metadata changes reach it too. It
 reports on ONE forward dataset: `--dataset NAME`, `--all-datasets` (one report
 per dataset under `report/<dataset>/`, because the figure basenames are fixed),
-`--list-datasets`. Every report names the dataset it is about.
+`--list-datasets`. Every report names the dataset it is about. The 2D section
+is a LADDER: `--2d-run RunN` means `Run{N}/ladder.json` and every scale
+subdirectory; `--all-datasets` pairs each dataset report with the matching
+scale and source of that ladder.
 
 ### THE PATH-BINDING CONTRACT (this is a link, and it was missing here)
 
@@ -817,22 +826,24 @@ all of `scripts/experiments/`}
   04 passes its view's. Reading the Kx pair for a Czx view is not a NameError, a
   bad path or a false sentence, so the other four sweeps PASS while the panel
   mislabels half the tensor. It shipped that way once.
-- **The run and the view must agree on the frequency.** Each run inverts ONE
-  tone; `Run{N}/dataset.txt` records which. Step 03 reads it for the true model
-  it plots (per-frequency grids differ, and the colour limits come from it) and
-  Step 04 pins its view frequency to it. Without that link a 2 kHz run is
-  compared against a 6 kHz view and the phasor is extracted at a tone the record
-  does not carry.
-- **Step 03 is a frequency ladder, not N independent inversions.** Each
-  frequency after the first starts from `Results/sg_up.rss-<iter>` of the
-  previous run, resampled onto this frequency's grid by
+- **The scale and the view must agree on the frequency.** Each scale inverts
+  ONE tone; `Run{N}/<freq>/dataset.txt` records which, and `ladder.json` lists
+  every scale of that attempt. Step 03 reads it for the true model it plots
+  (per-frequency grids differ, and the colour limits come from it) and Step 04
+  pins frequency with the Scale selector. Without that link a 2 kHz scale is
+  compared against a 6 kHz view and the phasor is extracted at a tone the
+  record does not carry.
+- **Step 03 is a frequency ladder in one `Run{N}`.** Each frequency after the
+  first starts from `Results/sg_up.rss-<iter>` of the previous **scale
+  subdirectory**, resampled onto this frequency's grid by
   `handoff_starting_model`. Staging writes a uniform `sg0` into every input
   directory because that inverted model does not exist yet; the run worker
-  overwrites `Run{N}/sg0.rss` before the later frequencies start. Copying the
-  staged uniform `sg0` unchanged is the bug that makes every scale restart from
-  the same initial model.
+  overwrites `Run{N}/<freq>/sg0.rss` before the later frequencies start. Copying
+  the staged uniform `sg0` unchanged is the bug that makes every scale restart
+  from the same initial model. Allocating a new `Run{N}` per frequency is the
+  bug that makes Step 04 unable to follow the ladder.
 - **Step 03 inversion knobs are applied at launch, not only at Generate Inputs.**
-  `Run{N}/inv.cfg` is what `mpiEminvTE2d` reads. Copying the staged file
+  `Run{N}/<freq>/inv.cfg` is what `mpiEminvTE2d` reads. Copying the staged file
   unchanged leaves Max iter / geps / dtx at whatever was typed when the inputs
   were generated. `apply_inversion_controls` patches them from the live widgets
   before the process starts. There is no per-frequency iteration list: one cap

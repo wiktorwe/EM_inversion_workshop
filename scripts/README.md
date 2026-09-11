@@ -91,7 +91,7 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   03's widget defaults to the forward run's own `apertx_m`, 110.6 m for the
   shipped survey.) `apply_inversion_controls` writes Max iter / geps / dtx /
   Tikhonov into an already-staged `inv.cfg` at launch, because the engine reads
-  `Run{N}/inv.cfg`, not the Generate Inputs snapshot.
+  `Run{N}/<freq>/inv.cfg`, not the Generate Inputs snapshot.
 - `inversion_1d.py`: the 1D layered model parameterisation and complex-gain
   misfit (`unpack_model_params`, `forward_analytic_for_tx`,
   `complex_gain_objective`, `build_bounds`). These used to live inside
@@ -107,7 +107,8 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   `handoff_starting_model`, which writes the next stage's `sg0.rss` from the
   previous inverted model; `find_output_model`, which reads
   `Results/sg_up.rss-<iter>`; `verify_roundtrip`, which checks the operator on
-  the known true model first) and the schedules (`stage_knot_spacing` scales
+  the known true model first), the GUI/report layout (`allocate_ladder_run`,
+  `iter_stages`, `ladder.json`), and the schedules (`stage_knot_spacing` scales
   the B-spline `dtx`/`dtz` with skin depth; `stage_regularisation` relaxes the
   Tikhonov weight as frequency rises, anchored so the final stage matches the
   single-stage baseline). Step 03 and `multiscale_2d_run.py` both call the
@@ -257,7 +258,9 @@ Other utilities:
   (`workspace/report/workflow_report.tex` plus PDF figures under
   `workspace/report/figures/`). Requires Step 01 `setup_metadata.json`. 2D and
   1D inversion sections are included only when a `Run{N}` directory exists
-  (latest by default). From the workshop root:
+  (latest by default). The 2D section is one ladder (`Run{N}/ladder.json` and
+  a subdirectory per frequency). `--all-datasets` pairs each dataset report
+  with the matching scale and source of that ladder. From the workshop root:
 
   ```bash
   python scripts/make_workshop_report.py
@@ -274,8 +277,9 @@ Other utilities:
   python scripts/make_workshop_report.py --all-datasets   # report/<dataset>/ each
   ```
 
-  With no `--dataset` it takes the first and says so. `--all-datasets` writes to
-  a subdirectory per dataset because the figure basenames are fixed.
+  With no `--dataset` it takes the first and says so. `--all-datasets` writes a
+  subdirectory per dataset. 2D figure names inside one report are per scale and
+  source (`inv2d_models_f2000Hz.pdf`, `inv2d_data_f2000Hz_hx.pdf`).
 
   The script does not re-run modelling or inversion. `--compile` runs
   `pdflatex` if it is on PATH. `./clean.sh` removes the report with `workspace/`.
