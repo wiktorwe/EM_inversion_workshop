@@ -41,13 +41,13 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.modules.inversion import (  # noqa: E402
-    create_initial_sg0_model, prepare_inversion_inputs, read_cfg_values, update_cfg_values,
+    prepare_inversion_inputs, read_cfg_values, update_cfg_values,
 )
 from scripts.modules.multiscale_2d import (  # noqa: E402
-    build_ladder, read_sg_grid, resample_model_log_rho, verify_roundtrip,
+    build_ladder, find_output_model, handoff_starting_model, read_sg_grid,
+    verify_roundtrip,
 )
 from scripts.modules.workshop_config import load_config  # noqa: E402
-from scripts.modules.workshop_report import latest_sg_up_file  # noqa: E402
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 
@@ -77,9 +77,10 @@ def prepare_stage(stage, *, previous_model: Path | None, initial_rho: float,
     )
     # The handoff: replace the uniform sg0 with the previous stage's model,
     # resampled onto THIS stage's grid, written where it can be inspected.
-    if previous_model is not None:
-        report = resample_model_log_rho(previous_model, stage.reference_dir / "sg.rss",
-                                        stage.run_dir / "sg0.rss")
+    report = handoff_starting_model(
+        previous_model, stage.reference_dir / "sg.rss", stage.run_dir / "sg0.rss"
+    )
+    if report is not None:
         stage.resample_report = report
         stage.sg0_from = Path(previous_model)
     update_cfg_values(stage.run_dir / "inv.cfg", {"tv_sgregalpha": f"{stage.tv_sgregalpha:.6g}"})
@@ -119,30 +120,6 @@ def model_error_vs_truth(model_path: Path, true_sg: Path) -> float:
     for i in range(a["nx"]):
         lb_on_a[i, :] = np.interp(a["z"], b["z"], tmp[i, :], left=tmp[i, 0], right=tmp[i, -1])
     return float(np.sqrt(np.mean((la - lb_on_a) ** 2)))
-
-
-def find_output_model(run_dir: Path) -> Path | None:
-    """The inverted Sg the engine wrote.
-
-    `Results/sg_up.rss-<iter>` is the real answer - that is where `saveResults`
-    puts every accepted model - so it is looked for FIRST, through the one
-    reader the notebooks and the report already use. The globs below it are the
-    legacy fallback for run directories written by older builds.
-    """
-    run_dir = Path(run_dir)
-    latest = latest_sg_up_file(run_dir)
-    if latest is not None:
-        return latest
-    staged = {"sg0.rss", "ep.rss", "wav2d.rss", "weight.rss",
-              "Sg_min.rss", "Sg_max.rss"}
-    for pattern in ("*Sg*final*.rss", "*sg*final*.rss", "*Sg_*.rss", "*sg_*.rss", "*.rss"):
-        hits = sorted(p for p in run_dir.glob(pattern)
-                      if "grad" not in p.name.lower()
-                      and not p.name.endswith("_data.rss")
-                      and p.name not in staged)
-        if hits:
-            return hits[-1]
-    return None
 
 
 def main() -> int:

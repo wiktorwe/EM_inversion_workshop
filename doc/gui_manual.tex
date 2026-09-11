@@ -25,7 +25,7 @@ The seven GUIs are:
   \item \textbf{00\_configure\_workshop} — Set rockem-suite path, MPI launcher, default SEG-Y, optional GPU engines for 2D forward/inversion, and other machine-specific settings.
   \item \textbf{01\_fw\_setup} — Prepare FD modelling inputs from a SEG-Y file.
   \item \textbf{02\_fwmodelling\_and\_data\_visualization} — Run FD modelling and visualize channel-gain amplitude/phase from shot records.
-  \item \textbf{03\_2d\_inversion} — Generate inversion inputs and run the 2D inversion locally.
+  \item \textbf{03\_2d\_inversion} — Generate inversion inputs and run a frequency-ladder 2D inversion locally.
   \item \textbf{04\_2d\_inversion\_results} — View 2D inversion results and compare real data with synthetics.
   \item \textbf{05\_1d\_inversion} — Independent 1D layered inversion, per transmitter, against a validated analytic magnetic (Hx) line-source solver.
   \item \textbf{06\_1d\_inversion\_results} — View the 1D inversion's pseudo-2D section, per-Tx diagnostics, and modelled-vs-observed data comparison.
@@ -161,7 +161,7 @@ Each start script writes its own Voila PID file (e.g.\ \texttt{.voila\_fw\_setup
   \item \textbf{Step 00 — Configure} — Set \texttt{rockem-suite} root, MPI launcher (\texttt{mpirun}), default process count, default SEG-Y (\texttt{examples/Fault\_1.sgy}), workspace directory name, and optional GPU flags for 2D forward (\texttt{mpiEmmodTE2dGpu}) and inversion (\texttt{mpiEminvTE2dGpu}). Click \textbf{Validate} to check CPU/GPU binaries, \texttt{nvidia-smi}, and paths, then \textbf{Save} to write \texttt{workshop\_config.json}.
   \item \textbf{Step 01 — FW setup} — Load a SEG-Y resistivity model, configure survey and FD design, then \textbf{Generate FD inputs (Finalize setup)}. Outputs go to \texttt{workspace/2D/forward/}.
   \item \textbf{Step 02 — FW modelling and data visualization} — Run forward modelling, load \texttt{Hxshot.rss}/\texttt{Hzshot.rss}, compute channel-gain amplitude/phase, run FDTD--analytic calibration (\texttt{C}; homogeneous \texttt{rho\_min} or 1D lateral average of the true model), and inspect results.
-  \item \textbf{Step 03 — 2D inversion} — Generate inversion inputs into \texttt{workspace/2D/inversion/input/}, then run inversion into \texttt{workspace/2D/inversion/RunN/}.
+  \item \textbf{Step 03 — 2D inversion} — Generate inversion inputs into \texttt{workspace/2D/inversion/input/}, then run a frequency-ladder inversion into \texttt{workspace/2D/inversion/RunN/} (lowest frequency first; each later frequency starts from the previous inverted model).
   \item \textbf{Step 04 — 2D inversion results} — Compare models and data; export SEG-Y to \texttt{workspace/2D/results/RunN/}.
   \item \textbf{Step 05 — 1D inversion} — Run per-transmitter 1D layered inversion; outputs go to \texttt{workspace/1D/inversion/RunN/}.
   \item \textbf{Step 06 — 1D inversion results} — View pseudo-2D sections and export to \texttt{workspace/1D/results/RunN/}.
@@ -282,7 +282,7 @@ The explicit-engine MPI FD binary must be installed: \texttt{mpiEmmodTE2d} (CPU)
 
 \subsection{Purpose}
 
-Generate inversion inputs from \texttt{workspace/2D/forward/} and the inversion template, run the inversion locally (staged into the next \texttt{workspace/2D/inversion/RunN/} directory), and monitor logs and model progress.
+Generate inversion inputs from \texttt{workspace/2D/forward/} and the inversion template, run a frequency-ladder inversion locally (one joint run per frequency, lowest first, each later frequency starting from the previous inverted model, staged into the next \texttt{workspace/2D/inversion/RunN/} directory), and monitor logs and model progress.
 
 \subsection{External requirement}
 
@@ -292,15 +292,17 @@ The explicit-engine MPI inversion binary must be installed: \texttt{mpiEminvTE2d
 
 \begin{itemize}
 
-  \item \textbf{Initial model} — Uniform conductivity (sigma) or resistivity (rho) starting model.
+  \item \textbf{Initial model} — Uniform conductivity (sigma) or resistivity (rho) starting model for the \emph{first} frequency. Every later frequency starts from the previous inverted model, resampled onto that frequency's own grid.
 
-  \item \textbf{sigma (S/m), rho (Ohm.m)} — Value of the uniform initial model.
+  \item \textbf{sigma (S/m), rho (Ohm.m)} — Value of the uniform initial model used at the first frequency.
 
-  \item \textbf{Max iter} — Maximum inversion iterations.
+  \item \textbf{Max iter} — Iteration cap written into each scale's \texttt{inv.cfg} when you press \textbf{Run inversion locally}, not only when inputs are generated. Every frequency gets this same cap.
 
-  \item \textbf{apertx (m), dtx, dtz} — Grid and extent parameters. \texttt{apertx} defaults to the forward run's value from Step 01 when available.
+  \item \textbf{geps (0=off)} — Stop a scale when the gradient L2-norm (the \texttt{GNORM} column in \texttt{progress.log}) falls below this value. \texttt{0} disables the test, so the iteration cap is what stops the scale. The engine also accepts \texttt{xeps} (model-update norm) and \texttt{fmin} (functional) in \texttt{inv.cfg}; they are the same class of stop, without GUI knobs.
 
-  \item \textbf{Tikhonov (sg)} — Regularization weight (\texttt{tik\_sgregalpha}).
+  \item \textbf{apertx (m), dtx, dtz} — Grid and extent parameters. \texttt{apertx} defaults to the forward run's value from Step 01 when available. Like Max iter, these are applied at run time from the live widgets.
+
+  \item \textbf{Tikhonov (sg)} — Regularization weight (\texttt{tik\_sgregalpha}), applied at run time with the other inversion knobs.
 
   \item \textbf{Clean selected RunN before run} — Clear the chosen run directory before staging new inputs.
 
@@ -308,7 +310,7 @@ The explicit-engine MPI inversion binary must be installed: \texttt{mpiEminvTE2d
 
   \item \textbf{nproc} — MPI processes for inversion (default from Step 00).
 
-  \item \textbf{Buttons} — \textbf{Generate inversion inputs} writes to \texttt{workspace/2D/inversion/input/}; \textbf{Run inversion locally} stages into \texttt{workspace/2D/inversion/RunN/}; \textbf{Refresh from progress.log}; \textbf{Stop run}; \textbf{Quit GUI server}.
+  \item \textbf{Buttons} — \textbf{Generate inversion inputs} writes to \texttt{workspace/2D/inversion/input/} (uniform \texttt{sg0} per frequency; that is the first-frequency start); \textbf{Run inversion locally} stages into \texttt{workspace/2D/inversion/RunN/}, writes the live Max iter / geps / apertx / dtx / Tikhonov into that run's \texttt{inv.cfg}, and after each frequency resamples the inverted model onto the next frequency's grid as its starting model; \textbf{Refresh from progress.log}; \textbf{Stop run}; \textbf{Quit GUI server}.
 
 \end{itemize}
 

@@ -89,7 +89,9 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   re-modelled wavefield can never drift from the data it is fitting. (The
   `apertx = "60"` in `templates/inv.cfg` is only a template fallback: notebook
   03's widget defaults to the forward run's own `apertx_m`, 110.6 m for the
-  shipped survey.)
+  shipped survey.) `apply_inversion_controls` writes Max iter / geps / dtx /
+  Tikhonov into an already-staged `inv.cfg` at launch, because the engine reads
+  `Run{N}/inv.cfg`, not the Generate Inputs snapshot.
 - `inversion_1d.py`: the 1D layered model parameterisation and complex-gain
   misfit (`unpack_model_params`, `forward_analytic_for_tx`,
   `complex_gain_objective`, `build_bounds`). These used to live inside
@@ -102,13 +104,17 @@ This folder is the module-oriented script codebase used by the GUI notebooks
 - `multiscale_2d.py`: the frequency-ladder machinery for 2D FWI over Task 2's
   per-frequency grids - the grid handoff (`resample_model_log_rho`, which
   interpolates in **log resistivity** and writes an inspectable `.rss`;
-  `verify_roundtrip`, which checks the operator on the known true model first)
-  and the schedules (`stage_knot_spacing` scales the B-spline `dtx`/`dtz` with
-  skin depth; `stage_regularisation` relaxes the Tikhonov weight as frequency
-  rises, anchored so the final stage matches the single-stage baseline). A stage
-  is plural over sources (`source_fields`, `forward_dirs`), so `source_mode=
-  "joint"` puts a frequency's Kx and Kz data in ONE run and their gradients sum
-  before the step.
+  `handoff_starting_model`, which writes the next stage's `sg0.rss` from the
+  previous inverted model; `find_output_model`, which reads
+  `Results/sg_up.rss-<iter>`; `verify_roundtrip`, which checks the operator on
+  the known true model first) and the schedules (`stage_knot_spacing` scales
+  the B-spline `dtx`/`dtz` with skin depth; `stage_regularisation` relaxes the
+  Tikhonov weight as frequency rises, anchored so the final stage matches the
+  single-stage baseline). Step 03 and `multiscale_2d_run.py` both call the
+  handoff - staging a uniform `sg0` per frequency is only the first-stage
+  start. A stage is plural over sources (`source_fields`, `forward_dirs`), so
+  `source_mode= "joint"` puts a frequency's Kx and Kz data in ONE run and their
+  gradients sum before the step.
 - `headless.py`: non-GUI drivers for the Step 01/02 pipeline
   (`SetupParams`, `build_forward_inputs`, `build_per_frequency_forward_inputs`,
   `run_forward`, `run_calibration`). Every numerical decision is delegated to

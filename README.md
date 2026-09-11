@@ -178,7 +178,8 @@ Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
 
 3. **Step 03 — 2D inversion**
    - Generate inversion inputs.
-   - Start inversion and monitor progress.
+   - Start the frequency-ladder inversion (lowest first; each later frequency
+     starts from the previous inverted model) and monitor progress.
 
 4. **Step 04 — 2D inversion results**
    - Compare models and data (freqs / `n_periods` from setup metadata).
@@ -321,8 +322,9 @@ comma-separated `source_type`, so its work list spans (shot × source type) and
 the Kx and Kz gradients are summed before the model is stepped. A 4-component
 acquisition is therefore one inversion whose every model update sees all four
 components, not two runs where the second overwrites the first's answer. The
-sequence over frequencies is one action over the whole matrix, not a choice you
-make dataset by dataset.
+sequence over frequencies is a ladder, one action over the whole matrix: lowest
+frequency first, each later frequency starting from the previous inverted
+model resampled onto its own grid.
 
 The historical layout is preserved exactly: one broadband run with a single
 source still writes straight into `workspace/2D/forward/` with
@@ -332,7 +334,8 @@ and older workspaces keep loading.
 Step 05 consumes the **whole** matrix: every per-frequency dataset contributes
 the one tone it was designed for, both sources contribute their two tensor
 components, and the inversion fits them together. Step 03 consumes it a
-frequency at a time, both sources at once. Steps 04 and 06 look at one result at
+frequency at a time, both sources at once, handing each inverted model to the
+next frequency as the starting model. Steps 04 and 06 look at one result at
 a time by nature.
 
 Each per-frequency dataset has its own grid and so its own calibration, and

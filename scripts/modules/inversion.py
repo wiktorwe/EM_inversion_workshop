@@ -482,6 +482,7 @@ def write_inv_cfg(
     dtz: float,
     input_file_values: Dict[str, str],
     tik_sgregalpha: Optional[float] = None,
+    geps: Optional[float] = None,
     allow_new: Optional[Iterable[str]] = None,
     new_key_comments: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
@@ -496,9 +497,47 @@ def write_inv_cfg(
     }
     if tik_sgregalpha is not None:
         updates["tik_sgregalpha"] = f"{float(tik_sgregalpha):.6g}"
+    if geps is not None:
+        updates["geps"] = f"{float(geps):.6g}"
     updates.update(input_file_values)
     return update_cfg_values(
         output_cfg, updates, allow_new=allow_new, new_key_comments=new_key_comments
+    )
+
+
+def apply_inversion_controls(
+    cfg_path: Path,
+    *,
+    max_iterations: int,
+    apertx: float,
+    dtx: float,
+    dtz: float,
+    tik_sgregalpha: Optional[float] = None,
+    geps: Optional[float] = None,
+) -> Dict[str, str]:
+    """Write the live inversion knobs into an already-staged `inv.cfg`.
+
+    Staging copies `input/<freq>/inv.cfg` into `Run{N}/`. The GUI knobs that
+    feed those keys must be applied HERE, at launch, because Generate Inputs
+    can have been clicked with different values. Copying the staged file
+    unchanged is what makes Max iter look like a dummy: the engine reads
+    `Run{N}/inv.cfg`, not the widget.
+    """
+    updates = {
+        "max_iterations": str(int(max_iterations)),
+        "apertx": f"{float(apertx):.6f}",
+        "dtx": f"{float(dtx):.6f}",
+        "dtz": f"{float(dtz):.6f}",
+    }
+    if tik_sgregalpha is not None:
+        updates["tik_sgregalpha"] = f"{float(tik_sgregalpha):.6g}"
+    if geps is not None:
+        updates["geps"] = f"{float(geps):.6g}"
+    # `geps` is new in the template; a staged inv.cfg from before that line
+    # existed still has to accept it, or Run dies with KeyError after Generate
+    # already succeeded.
+    return update_cfg_values(
+        Path(cfg_path), updates, allow_new=["geps"] if geps is not None else None
     )
 
 
@@ -514,6 +553,7 @@ def prepare_inversion_inputs(
     uniform_conductivity: Optional[float] = None,
     uniform_resistivity: Optional[float] = None,
     tik_sgregalpha: Optional[float] = None,
+    geps: Optional[float] = None,
     sg_min: float = 1e-8,
     sg_max: float = 1.0,
     ep_min: Optional[float] = None,
@@ -665,6 +705,7 @@ def prepare_inversion_inputs(
         dtx=dtx,
         dtz=dtz,
         tik_sgregalpha=tik_sgregalpha,
+        geps=geps,
         input_file_values=input_file_values,
         allow_new=allow_new,
         new_key_comments=record_comments,
@@ -730,6 +771,7 @@ __all__ = [
     "find_observed_records",
     "normalise_fdmodel_dirs",
     "prepare_data_from_fdmodel",
+    "apply_inversion_controls",
     "prepare_inversion_inputs",
     "read_cfg_values",
     "recordfile_cfg_key",

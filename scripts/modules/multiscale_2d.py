@@ -95,6 +95,7 @@ ladder and the baseline agree at the top of the band by construction.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
@@ -426,9 +427,68 @@ def build_ladder(
     return stages
 
 
+_SG_UP_RE = re.compile(r"sg_up\.rss-(\d+)$")
+
+
+def find_output_model(run_dir: Path | str) -> Optional[Path]:
+    """The inverted Sg the engine wrote.
+
+    `Results/sg_up.rss-<iter>` is where `saveResults` puts every accepted
+    model (`inversionBase.h:28`), so it is looked for FIRST. The globs
+    below it are the fallback for run directories written by older builds.
+    A ladder that cannot find this file must STOP, not continue from the
+    uniform start - that is how N independent inversions masquerade as a
+    frequency ladder.
+    """
+    run_dir = Path(run_dir)
+    candidates = list(run_dir.glob("Results/sg_up.rss-*")) + list(run_dir.glob("sg_up.rss-*"))
+    if candidates:
+        def _suffix(path: Path) -> int:
+            m = _SG_UP_RE.search(path.name)
+            return int(m.group(1)) if m else -1
+        return sorted(candidates, key=lambda p: (_suffix(p), p.name))[-1]
+    staged = {"sg0.rss", "ep.rss", "wav2d.rss", "weight.rss",
+              "Sg_min.rss", "Sg_max.rss"}
+    for pattern in ("*Sg*final*.rss", "*sg*final*.rss", "*Sg_*.rss", "*sg_*.rss", "*.rss"):
+        hits = sorted(
+            p for p in run_dir.glob(pattern)
+            if "grad" not in p.name.lower()
+            and not p.name.endswith("_data.rss")
+            and p.name not in staged
+        )
+        if hits:
+            return hits[-1]
+    return None
+
+
+def handoff_starting_model(
+    previous_model: Path | str | None,
+    template_sg: Path | str,
+    dest_sg0: Path | str,
+) -> Optional[dict]:
+    """Write `dest_sg0` from the previous inverted model, on this stage's grid.
+
+    `previous_model is None` is the first stage: keep the uniform `sg0` already
+    written by `create_initial_sg0_model` and return None. Any later stage
+    MUST pass a real path; a missing file is an error, not a silent fall-back
+    to the uniform start.
+    """
+    if previous_model is None:
+        return None
+    previous_model = Path(previous_model)
+    if not previous_model.exists():
+        raise FileNotFoundError(
+            f"Previous inverted model {previous_model} is missing; "
+            "the next frequency has no starting model to resample."
+        )
+    return resample_model_log_rho(previous_model, template_sg, dest_sg0)
+
+
 __all__ = [
     "Stage",
     "build_ladder",
+    "find_output_model",
+    "handoff_starting_model",
     "read_sg_grid",
     "resample_model_log_rho",
     "stage_knot_spacing",

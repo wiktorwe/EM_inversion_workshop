@@ -360,6 +360,8 @@ same edit that caused it:
 | Built one dataset per frequency, each with its own `eps_r_used` | Steps 05/06 kept reading ONE `eps_r` and applying it to the whole band - 0.91 sigma of bias at 6 kHz, visible only as a slightly worse fit | list which metadata keys VARY across datasets, then grep every reader of each one |
 | Then made that `eps_r` an **array** in `get_eps_r_used` | every leftover `float(eps_r)` (`layers_from_rho_thk`, `build_1d_run_summary`, notebook 05 QC, notebook 06 synthetics) - TypeError in the GUI | type/shape change: grep `float(` / `[0]` / format of the OLD scalar, not just the name |
 | Fixed those `float()` sites so Step 06's synthetics ran at all | the NEXT statement in the same handler, `int(real['Hx'].get('nt', 0))`, died on a matrix: `.get(k, default)` returns None when the key EXISTS and holds None, which an assembled result's `nt`/`dt` do | when you unblock a handler, RUN it to the end - the crash you fixed was hiding the next one |
+| Made the 2D inversion a per-frequency sequence | notebook 03 staged a uniform `sg0` for every frequency and the run worker copied it unchanged, so every scale restarted from the same initial model | the experiment driver already had the handoff (`resample_model_log_rho`); grep the notebook's run loop for `sg0`, not only the module that implements the resample |
+| Baked inv.cfg knobs only at Generate Inputs | Max iter looked dummy: Run copied the staged file, so every scale did template 20 | grep whether Run writes `inv.cfg`, not only whether Generate reads the widget |
 | Replaced the per-notebook path globals with one `DS` | `chainsweep.py` only walked bare `Path` globals, so it would have reported PASS on a notebook whose every artifact was root-bound | when you change the SHAPE of what a check inspects, change the check in the same edit - a check that cannot see its subject reads as evidence |
 | Made Step 05's features load on a matrix | `handlersweep.py` then actually reached `on_tune_de_budget`, a real 174 s DE run, and the sweep timed out | a sweep that calls every handler must BOUND the ones that optimise - `handlersweep` now patches the tuners to a single tiny budget rather than skipping them, because the lambda tuner is exactly the handler that shipped a bug |
 | Added per-frequency interface snapping | the empymod fallback branch still forwarded the UNSNAPPED thickness, silently modelling a different Earth than the main path | follow the new argument into every branch, including error paths - this is the second time that exact branch has been missed |
@@ -556,16 +558,32 @@ previous one; every arrow is a place a change can break something.
     line source and would otherwise be handed the wrong C.
 
 ### Step 03 - 2D inversion staging and run
-- **imports** `fd_visualization`, `headless`, `inversion`, `workshop_config`
+- **imports** `fd_visualization`, `headless`, `inversion`, `multiscale_2d`, `workshop_config`
 - **key chain fact** it stages and runs one JOINT inversion per FREQUENCY, over
   all of that frequency's source components, sequentially, in one action.
   `mpiEminvTE2d` takes a comma-separated `source_type`, so its work list spans
   (shot x source type) and the Kx and Kz gradients are summed before the step -
-  one model update sees all four tensor components. Inputs go to
-  `inversion/input/<freq>_hx_hz/`, each run records its group in
+  one model update sees all four tensor components. The sequence is a ladder:
+  lowest frequency first, and each frequency after the first starts from the
+  previous inverted model (`Results/sg_up.rss-<iter>`), resampled onto this
+  frequency's own grid by `multiscale_2d.handoff_starting_model`. Staging writes
+  a uniform `sg0.rss` into every `input/<freq>_hx_hz/`; that is the
+  first-frequency start. The run worker overwrites `Run{N}/sg0.rss` before each
+  later frequency starts - copying the staged uniform `sg0` unchanged makes N
+  independent inversions that only look like a ladder. A failed or model-less
+  stage stops the batch, because later frequencies have nothing to start from.
+  Inputs go to `inversion/input/<freq>_hx_hz/`, each run records its group in
   `Run{N}/dataset.txt`, and Stop halts the whole batch rather than letting the
   next frequency start. `headless.group_datasets_by_frequency` is the one
   grouping, shared with `multiscale_2d.build_ladder`.
+- **key chain fact** Max iter, geps, apertx, dtx, dtz and Tikhonov are written
+  into `Run{N}/inv.cfg` at launch by `inversion.apply_inversion_controls`, from
+  the live widgets. Staging copies `input/<freq>/inv.cfg`; leaving that copy
+  unchanged is what makes Max iter look dummy - the engine reads the run
+  directory, not the widget. There is no per-frequency iteration picker: one
+  cap for every scale. `geps` (gradient L2-norm, the GNORM column) is the
+  scale-local stop; `0` disables it because gnorm is always > 0. The engine
+  also stops on `xeps` / `fmin` / `max_linesearch` when those tests fire.
 - **reads** a forward dataset: `mod.cfg` (for `order`, `lpml`, `pml_*`,
   `source_type`), `sg.rss`, `ep.rss`, `wav2d.rss`, `Data/{Hx,Hz}shot.rss`
 - **writes** `workspace/2D/inversion/input/` and `Run{N}/`: `inv.cfg`,
@@ -805,6 +823,20 @@ all of `scripts/experiments/`}
   Step 04 pins its view frequency to it. Without that link a 2 kHz run is
   compared against a 6 kHz view and the phasor is extracted at a tone the record
   does not carry.
+- **Step 03 is a frequency ladder, not N independent inversions.** Each
+  frequency after the first starts from `Results/sg_up.rss-<iter>` of the
+  previous run, resampled onto this frequency's grid by
+  `handoff_starting_model`. Staging writes a uniform `sg0` into every input
+  directory because that inverted model does not exist yet; the run worker
+  overwrites `Run{N}/sg0.rss` before the later frequencies start. Copying the
+  staged uniform `sg0` unchanged is the bug that makes every scale restart from
+  the same initial model.
+- **Step 03 inversion knobs are applied at launch, not only at Generate Inputs.**
+  `Run{N}/inv.cfg` is what `mpiEminvTE2d` reads. Copying the staged file
+  unchanged leaves Max iter / geps / dtx at whatever was typed when the inputs
+  were generated. `apply_inversion_controls` patches them from the live widgets
+  before the process starts. There is no per-frequency iteration list: one cap
+  for every scale, plus `geps` so a scale can stop when GNORM has fallen.
 - **ONE `Dataweightfile` for every component of a joint run.** Do not add
   `Dataweightfile_<SRC>` to "balance" the components. Cxz/Czx are weak on a
   layered model because a 1D earth has no lateral structure for them to sense -
