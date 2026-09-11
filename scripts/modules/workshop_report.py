@@ -117,7 +117,9 @@ class ReportContext:
     notes: list[str] = field(default_factory=list)
     figures: dict[str, Path] = field(default_factory=dict)
     inv2d_sections: list[dict[str, Any]] = field(default_factory=list)
-    match_2d_to_dataset: bool = False
+    fw_freq_sections: list[dict[str, Any]] = field(default_factory=list)
+    fw_calibrations: list[dict[str, Any]] = field(default_factory=list)
+    datasets: list[dict[str, Any]] = field(default_factory=list)
     timestamp: str = ""
 
 
@@ -327,25 +329,40 @@ def gains_from_npz(path: Path) -> dict:
     }
 
 
-def load_or_compute_gains(ctx: ReportContext) -> Optional[dict]:
-    npz = ctx.fwd_dir / "processed" / "amp_phase_results.npz"
-    if npz.exists():
-        return gains_from_npz(npz)
-    meta = ctx.setup_meta
+def _meta_at(fwd_dir: Path) -> dict:
+    path = Path(fwd_dir) / "setup_metadata.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def load_or_compute_gains(
+    fwd_dir: Path,
+    meta: Mapping,
+    notes: Optional[list[str]] = None,
+) -> Optional[dict]:
+    from scripts.modules.headless import dataset_paths
+
+    fwd_dir = Path(fwd_dir)
+    ds = dataset_paths(fwd_dir)
+    if ds.amp_phase_npz.exists():
+        return gains_from_npz(ds.amp_phase_npz)
     wav_name = str(meta.get("forward_wavelet") or "wav2d.rss")
-    hx = ctx.fwd_dir / "Data" / "Hxshot.rss"
-    hz = ctx.fwd_dir / "Data" / "Hzshot.rss"
-    wav = ctx.fwd_dir / wav_name
-    if not (hx.exists() and hz.exists() and wav.exists()):
+    wav = fwd_dir / wav_name
+    if not (ds.hx.exists() and ds.hz.exists() and wav.exists()):
         return None
     freqs = meta.get("flist_hz") or meta.get("freqs_hz") or []
     if not freqs:
-        ctx.notes.append("Modelled-data frequencies missing from setup_metadata.json.")
+        if notes is not None:
+            notes.append(f"Modelled-data frequencies missing in {fwd_dir.name}.")
         return None
     f_min = float(meta.get("f_min_hz") or min(float(v) for v in freqs))
     n_periods = float(meta.get("n_periods_extract") or 3.0)
     return compute_gains_for_fd_outputs(
-        hx, hz, wav, freqs=freqs, f_min_hz=f_min, n_periods_extract=n_periods
+        ds.hx, ds.hz, wav, freqs=freqs, f_min_hz=f_min, n_periods_extract=n_periods
     )
 
 
@@ -378,6 +395,16 @@ def _try_figure(ctx: ReportContext, key: str, fn, *args, **kwargs) -> Optional[P
 
 def collect_fw_rows(ctx: ReportContext) -> list[tuple[str, list[tuple[str, Any]]]]:
     meta = ctx.setup_meta
+    datasets = ctx.datasets or []
+    freqs = sorted({
+        float(d["freq_hz"]) for d in datasets
+        if d.get("freq_hz") is not None
+    })
+    sources: list[str] = []
+    for d in datasets:
+        src = str(d.get("source_field") or "").upper()
+        if src and src not in sources:
+            sources.append(src)
     mod_cfg: dict[str, str] = {}
     survey_cfg: dict[str, str] = {}
     mod_path = ctx.fwd_dir / str(meta.get("forward_cfg") or "mod.cfg")
@@ -395,27 +422,17 @@ def collect_fw_rows(ctx: ReportContext) -> list[tuple[str, list[tuple[str, Any]]
     pml = meta.get("pml_heuristic") or {}
     groups = [
         (
-            "Frequencies and wavelet",
+            "Acquisition matrix",
             [
-                ("Frequencies (Hz)", meta.get("flist_hz")),
-                ("f_min (Hz)", meta.get("f_min_hz")),
-                ("f_max (Hz)", meta.get("f_max_hz")),
-                ("n_periods_extract", meta.get("n_periods_extract")),
-                # Reported next to the wavelet's own n_periods because the two
-                # must NOT be equal: an extraction window as long as the record
-                # includes the source ramp-up and biases every phasor (see
-                # doc/numerics_findings.md).
-                ("wavelet n_periods", meta.get("wavelet_n_periods")),
-                ("wavelet ramp (s)", meta.get("wavelet_ramp_seconds")),
-                ("Wavelet dt (s)", meta.get("dt_wavelet_s")),
-                ("Wavelet file", meta.get("forward_wavelet")),
+                ("Datasets", len(datasets) or None),
+                ("Frequencies (Hz)", freqs or meta.get("flist_hz")),
+                ("Sources", ", ".join(sources) if sources else meta.get("source_field")),
+                ("Names", ", ".join(d["name"] for d in datasets) if datasets else None),
             ],
         ),
         (
             "Survey geometry",
             [
-                ("source component", meta.get("source_field")),
-                ("source_type", meta.get("source_type")),
                 ("ntx", meta.get("ntx") or survey_cfg.get("nsx")),
                 ("nrx", meta.get("nrx") or survey_cfg.get("ngx")),
                 ("tx0 (m)", meta.get("tx0_m") or survey_cfg.get("sx0")),
@@ -428,25 +445,56 @@ def collect_fw_rows(ctx: ReportContext) -> list[tuple[str, list[tuple[str, Any]]
                 ("max offset (m)", meta.get("max_offset_m")),
             ],
         ),
-        (
-            "FD design",
-            [
-                ("dx target (m)", meta.get("dx_model_target_m")),
-                ("dt target (s)", meta.get("dt_model_target_s")),
-                ("dtrec (s)", meta.get("dtrec_written_s") or mod_cfg.get("dtrec")),
-                ("eps_r used", meta.get("eps_r_used")),
-                ("explicit CFL safety", meta.get("explicit_cfl_safety")),
-                ("FD order", meta.get("fd_order") or mod_cfg.get("order")),
-                ("eps_r cap binding", meta.get("eps_r_cap_binding")),
-                ("apertx (m)", meta.get("apertx_m") or mod_cfg.get("apertx")),
-                ("lpml (cells)", pml.get("lpml_cells") or mod_cfg.get("lpml")),
-                ("pml_kmax", pml.get("pml_kmax") or mod_cfg.get("pml_kmax")),
-                ("pml_smax", pml.get("pml_smax") or mod_cfg.get("pml_smax")),
-                ("pml_amax", pml.get("pml_amax") or mod_cfg.get("pml_amax")),
-                ("rho_min (Ohm-m)", meta.get("rho_min_ohm_m")),
-                ("rho_max (Ohm-m)", meta.get("rho_max_ohm_m")),
-            ],
-        ),
+    ]
+    fd_rows: list[tuple[str, Any]] = [
+        ("rho_min (Ohm-m)", meta.get("rho_min_ohm_m")),
+        ("rho_max (Ohm-m)", meta.get("rho_max_ohm_m")),
+        ("explicit CFL safety", meta.get("explicit_cfl_safety")),
+        ("lpml (cells)", pml.get("lpml_cells") or mod_cfg.get("lpml")),
+        ("pml_kmax", pml.get("pml_kmax") or mod_cfg.get("pml_kmax")),
+        ("pml_smax", pml.get("pml_smax") or mod_cfg.get("pml_smax")),
+        ("pml_amax", pml.get("pml_amax") or mod_cfg.get("pml_amax")),
+    ]
+    seen_freq: set[Any] = set()
+    for d in datasets:
+        f = d.get("freq_hz")
+        if f in seen_freq:
+            continue
+        seen_freq.add(f)
+        m = _meta_at(Path(d["run_dir"])) or dict(d.get("meta") or {})
+        tag = f"{float(f):g} Hz" if f is not None else str(d.get("name") or "dataset")
+        fd_rows.extend([
+            (f"{tag} dx (m)", m.get("dx_model_target_m")),
+            (f"{tag} dt (s)", m.get("dt_model_target_s")),
+            (f"{tag} dtrec (s)", m.get("dtrec_written_s")),
+            (f"{tag} eps_r", m.get("eps_r_used")),
+            # n_periods_extract next to the wavelet's own n_periods because the
+            # two must NOT be equal: an extraction window as long as the record
+            # includes the source ramp-up and biases every phasor (see
+            # doc/numerics_findings.md). These keys differ per frequency.
+            (f"{tag} n_periods_extract", m.get("n_periods_extract")),
+            (f"{tag} f_min (Hz)", m.get("f_min_hz")),
+            (f"{tag} wavelet n_periods", m.get("wavelet_n_periods")),
+            (f"{tag} wavelet ramp (s)", m.get("wavelet_ramp_seconds")),
+            (f"{tag} order", m.get("fd_order")),
+            (f"{tag} apertx (m)", m.get("apertx_m")),
+        ])
+    if not datasets:
+        fd_rows.extend([
+            ("dx target (m)", meta.get("dx_model_target_m")),
+            ("dt target (s)", meta.get("dt_model_target_s")),
+            ("dtrec (s)", meta.get("dtrec_written_s") or mod_cfg.get("dtrec")),
+            ("eps_r used", meta.get("eps_r_used")),
+            ("n_periods_extract", meta.get("n_periods_extract")),
+            ("f_min (Hz)", meta.get("f_min_hz")),
+            ("wavelet n_periods", meta.get("wavelet_n_periods")),
+            ("wavelet ramp (s)", meta.get("wavelet_ramp_seconds")),
+            ("Wavelet dt (s)", meta.get("dt_wavelet_s")),
+            ("FD order", meta.get("fd_order") or mod_cfg.get("order")),
+            ("apertx (m)", meta.get("apertx_m") or mod_cfg.get("apertx")),
+        ])
+    groups.append(("FD design", fd_rows))
+    groups.append(
         (
             "Engine",
             [
@@ -456,8 +504,8 @@ def collect_fw_rows(ctx: ReportContext) -> list[tuple[str, list[tuple[str, Any]]
                 ("ny samples", meta.get("ny_samples")),
                 ("SEG-Y template", _display_path(meta.get("segy_template_path"), ctx.root)),
             ],
-        ),
-    ]
+        )
+    )
     return groups
 
 
@@ -489,28 +537,11 @@ def _report_stages(ctx: ReportContext) -> list[dict[str, Any]]:
         ctx.notes.append(
             f"{ctx.run_2d.name} has no ladder.json; it is not a multi-scale 2D run."
         )
-        return []
-    if not ctx.match_2d_to_dataset:
-        return stages
-    raw = ctx.setup_meta.get("flist_hz")
-    if raw is None:
-        return stages
-    if isinstance(raw, (list, tuple, np.ndarray)):
-        freq = float(np.asarray(raw, dtype=float).ravel()[0])
-    else:
-        freq = float(raw)
-    matched = [s for s in stages if abs(float(s["freq_hz"]) - freq) < 1e-3]
-    return matched or stages
+    return stages
 
 
-def _report_sources(ctx: ReportContext, stage: Mapping) -> list[str]:
-    fields = [str(s).upper() for s in (stage.get("source_fields") or [])]
-    if not ctx.match_2d_to_dataset:
-        return fields
-    src = str(ctx.setup_meta.get("source_field") or "").upper()
-    if src and src in fields:
-        return [src]
-    return fields
+def _report_sources(stage: Mapping) -> list[str]:
+    return [str(s).upper() for s in (stage.get("source_fields") or [])]
 
 
 def _stage_forward(stage: Mapping, fwd_root: Path) -> tuple[Optional[Path], dict]:
@@ -657,88 +688,193 @@ def _survey_positions(ctx: ReportContext) -> tuple[np.ndarray, np.ndarray, np.nd
         return tx_x, tx_z, rx_x, rx_z
 
 
+def _freq_tag(freq: Any) -> str:
+    if freq is None:
+        return "broadband"
+    return f"f{float(freq):.0f}Hz"
+
+
+def _write_resistivity_figure(ctx: ReportContext, fwd_dir: Path, meta: Mapping, key: str) -> Optional[Path]:
+    sg = Path(fwd_dir) / "sg.rss"
+    if not sg.exists():
+        ctx.notes.append(f"Forward resistivity figure skipped for {key}: sg.rss not found.")
+        return None
+    saved_fwd, saved_meta = ctx.fwd_dir, ctx.setup_meta
+    ctx.fwd_dir, ctx.setup_meta = Path(fwd_dir), dict(meta)
+    tx_x, tx_z, rx_x, rx_z = _survey_positions(ctx)
+    ctx.fwd_dir, ctx.setup_meta = saved_fwd, saved_meta
+    x, z, rho = resistivity_from_sg_rss(sg)
+    return _try_figure(
+        ctx,
+        key,
+        save_resistivity_survey_figure,
+        x, z, rho,
+        ctx.figures_dir / f"{key}.pdf",
+        tx_x=tx_x, tx_z=tx_z, rx_x=rx_x, rx_z=rx_z,
+    )
+
+
+def _write_wavelet_figure(ctx: ReportContext, fwd_dir: Path, meta: Mapping, key: str) -> Optional[Path]:
+    wav_name = str(meta.get("forward_wavelet") or "wav2d.rss")
+    wav_path = Path(fwd_dir) / wav_name
+    if not wav_path.exists():
+        ctx.notes.append(f"Wavelet figure skipped for {key}: {wav_name} not found.")
+        return None
+    wav = load_rss_traces(wav_path)
+    w = np.asarray(wav["data"], dtype=float)[:, 0]
+    t = np.arange(w.size, dtype=float) * float(wav["dt"])
+    return _try_figure(
+        ctx,
+        key,
+        save_wavelet_figure,
+        t, w,
+        ctx.figures_dir / f"{key}.pdf",
+        flist_hz=meta.get("flist_hz") or meta.get("freqs_hz"),
+    )
+
+
 def write_fw_figures(ctx: ReportContext) -> None:
-    sg = ctx.fwd_dir / "sg.rss"
-    if sg.exists():
-        tx_x, tx_z, rx_x, rx_z = _survey_positions(ctx)
-        x, z, rho = resistivity_from_sg_rss(sg)
-        _try_figure(
-            ctx,
-            "fw_resistivity",
-            save_resistivity_survey_figure,
-            x,
-            z,
-            rho,
-            ctx.figures_dir / "fw_resistivity.pdf",
-            tx_x=tx_x,
-            tx_z=tx_z,
-            rx_x=rx_x,
-            rx_z=rx_z,
-        )
-    else:
-        ctx.notes.append("Forward resistivity figure skipped: sg.rss not found.")
+    """True models, wavelets, modelled gathers and C(f) for the whole matrix."""
+    from scripts.modules.headless import group_datasets_by_frequency
 
-    wav_name = str(ctx.setup_meta.get("forward_wavelet") or "wav2d.rss")
-    wav_path = ctx.fwd_dir / wav_name
-    if wav_path.exists():
-        wav = load_rss_traces(wav_path)
-        w = np.asarray(wav["data"], dtype=float)[:, 0]
-        t = np.arange(w.size, dtype=float) * float(wav["dt"])
-        _try_figure(
-            ctx,
-            "fw_wavelet",
-            save_wavelet_figure,
-            t,
-            w,
-            ctx.figures_dir / "fw_wavelet.pdf",
-            flist_hz=ctx.setup_meta.get("flist_hz") or ctx.setup_meta.get("freqs_hz"),
-        )
-    else:
-        ctx.notes.append(f"Wavelet figure skipped: {wav_name} not found.")
+    try:
+        groups = group_datasets_by_frequency(ctx.cfg.fwd_2d_dir)
+    except Exception:
+        groups = []
+    if not groups:
+        groups = [{
+            "name": ctx.fwd_dir.name,
+            "freq_hz": None,
+            "sources": [str(ctx.setup_meta.get("source_field") or "HX").upper()],
+            "forward_dirs": {str(ctx.setup_meta.get("source_field") or "HX").upper(): ctx.fwd_dir},
+            "meta": ctx.setup_meta,
+        }]
 
+    ctx.fw_freq_sections = []
+    for grp in groups:
+        freq = grp.get("freq_hz")
+        tag = _freq_tag(freq)
+        title = f"{float(freq):g} Hz" if freq is not None else "Forward model"
+        fwd = Path(next(iter(grp["forward_dirs"].values())))
+        meta = _meta_at(fwd) or dict(grp.get("meta") or ctx.setup_meta)
+        section: dict[str, Any] = {
+            "title": title,
+            "resistivity": None,
+            "wavelet": None,
+            "data": [],
+        }
+        if _write_resistivity_figure(ctx, fwd, meta, f"fw_resistivity_{tag}"):
+            section["resistivity"] = f"fw_resistivity_{tag}"
+        if _write_wavelet_figure(ctx, fwd, meta, f"fw_wavelet_{tag}"):
+            section["wavelet"] = f"fw_wavelet_{tag}"
+        for src, src_dir in grp["forward_dirs"].items():
+            src = str(src).upper()
+            src_dir = Path(src_dir)
+            src_meta = _meta_at(src_dir) or meta
+            gains = load_or_compute_gains(src_dir, src_meta, ctx.notes)
+            src_tag = src.lower()
+            src_lab = SOURCE_LABELS.get(src, src)
+            c_hx = COMPONENT_BY_SOURCE_RECEIVER.get((src, "HX"), "Hx")
+            c_hz = COMPONENT_BY_SOURCE_RECEIVER.get((src, "HZ"), "Hz")
+            if gains is None:
+                ctx.notes.append(
+                    f"Modelled-data figures skipped for {tag} {src}: "
+                    "no Data/processed/amp_phase_results.npz and no Hx/Hz shot gathers."
+                )
+                continue
+            rx_key = f"fw_amp_phase_{tag}_{src_tag}"
+            tx_key = f"fw_amp_phase_vs_tx_{tag}_{src_tag}"
+            _try_figure(
+                ctx, rx_key, save_amp_phase_vs_rx_figure, gains,
+                ctx.figures_dir / f"{rx_key}.pdf",
+            )
+            _try_figure(
+                ctx, tx_key, save_amp_phase_vs_tx_figure, gains,
+                ctx.figures_dir / f"{tx_key}.pdf",
+            )
+            section["data"].append({
+                "rx_key": rx_key,
+                "tx_key": tx_key,
+                "caption": (
+                    f"Steady-state {c_hx}/{c_hz} channel-gain amplitude and phase "
+                    f"versus receiver ({src_lab} source) at {title}."
+                ),
+                "tx_caption": (
+                    f"Steady-state {c_hx}/{c_hz} channel-gain amplitude and phase "
+                    f"versus transmitter ({src_lab} source) at {title}."
+                ),
+            })
+        ctx.fw_freq_sections.append(section)
 
-def write_modelled_data_figures(ctx: ReportContext) -> None:
-    gains = load_or_compute_gains(ctx)
-    if gains is None:
-        ctx.notes.append(
-            "Modelled-data figures skipped: no processed/amp_phase_results.npz and no Hx/Hz shot gathers."
-        )
-        return
-    _try_figure(
-        ctx,
-        "fw_amp_phase",
-        save_amp_phase_vs_rx_figure,
-        gains,
-        ctx.figures_dir / "fw_amp_phase.pdf",
-    )
-    _try_figure(
-        ctx,
-        "fw_amp_phase_vs_tx",
-        save_amp_phase_vs_tx_figure,
-        gains,
-        ctx.figures_dir / "fw_amp_phase_vs_tx.pdf",
-    )
-    cal_rows, cal = collect_calibration_rows(ctx.setup_meta)
-    if cal is None:
-        ctx.notes.append("No fdtd_analytic_calibration in setup_metadata.json.")
-        return
-    c_arr = _complex_c_from_meta(ctx.setup_meta)
-    freqs = cal.get("freqs_hz") or ctx.setup_meta.get("flist_hz") or []
-    if c_arr is None:
-        ctx.notes.append("Calibration C(f) arrays missing from setup_metadata.json.")
-        return
-    _try_figure(
-        ctx,
-        "fw_calibration",
-        save_calibration_c_figure,
-        freqs,
-        c_arr,
-        ctx.figures_dir / "fw_calibration.pdf",
-        scatter_hx_pct=cal.get("scatter_hx_pct"),
-        scatter_hz_pct=cal.get("scatter_hz_pct"),
-        method=str(cal.get("method") or ""),
-    )
-    _ = cal_rows
+    by_src: dict[str, list[dict[str, Any]]] = {}
+    for d in ctx.datasets:
+        src = str(d.get("source_field") or "").upper()
+        if src:
+            by_src.setdefault(src, []).append(d)
+    if not by_src and ctx.setup_meta:
+        by_src[str(ctx.setup_meta.get("source_field") or "HX").upper()] = [{
+            "run_dir": str(ctx.fwd_dir),
+            "freq_hz": None,
+            "source_field": str(ctx.setup_meta.get("source_field") or "HX").upper(),
+        }]
+    ctx.fw_calibrations = []
+    for src, entries in by_src.items():
+        freqs: list[float] = []
+        cs: list[complex] = []
+        cal0: Optional[dict] = None
+        for e in sorted(
+            entries,
+            key=lambda x: (x.get("freq_hz") is None, float(x["freq_hz"]) if x.get("freq_hz") is not None else 0.0),
+        ):
+            m = _meta_at(Path(e["run_dir"]))
+            _rows, cal = collect_calibration_rows(m)
+            if cal is None:
+                continue
+            if cal0 is None:
+                cal0 = cal
+            c_arr = _complex_c_from_meta(m)
+            f_list = cal.get("freqs_hz") or m.get("flist_hz") or (
+                [e["freq_hz"]] if e.get("freq_hz") is not None else []
+            )
+            if c_arr is None or not f_list:
+                continue
+            for f, c in zip(np.atleast_1d(f_list), np.atleast_1d(c_arr)):
+                freqs.append(float(f))
+                cs.append(complex(c))
+        src_lab = SOURCE_LABELS.get(src, src)
+        c_abs = np.abs(np.asarray(cs, dtype=complex)) if cs else None
+        c_ang = np.angle(np.asarray(cs, dtype=complex), deg=True) if cs else None
+        item: dict[str, Any] = {
+            "title": f"{src_lab} source",
+            "rows": [
+                ("Method", (cal0 or {}).get("method")),
+                ("Notes", (cal0 or {}).get("notes")),
+                ("rho_ref (Ohm-m)", (cal0 or {}).get("rho_ohm_m")),
+                ("Frequencies (Hz)", freqs or None),
+                ("|C|", c_abs),
+                ("arg C (deg)", c_ang),
+            ],
+            "key": None,
+        }
+        if cal0 is None:
+            ctx.notes.append(f"No FDTD--analytic calibration stored for {src_lab}.")
+        elif not freqs:
+            ctx.notes.append(f"Calibration C(f) arrays missing for {src_lab}.")
+        else:
+            key = f"fw_calibration_{src.lower()}"
+            _try_figure(
+                ctx,
+                key,
+                save_calibration_c_figure,
+                freqs,
+                np.asarray(cs, dtype=complex),
+                ctx.figures_dir / f"{key}.pdf",
+                scatter_hx_pct=cal0.get("scatter_hx_pct"),
+                scatter_hz_pct=cal0.get("scatter_hz_pct"),
+                method=str(cal0.get("method") or ""),
+            )
+            item["key"] = key
+        ctx.fw_calibrations.append(item)
 
 
 def write_2d_figures(ctx: ReportContext) -> None:
@@ -808,7 +944,7 @@ def write_2d_figures(ctx: ReportContext) -> None:
             section["models"] = models_key
             section["slices"] = slices_key
 
-        sources = _report_sources(ctx, stage)
+        sources = _report_sources(stage)
         if not sources:
             sources = ["HX"]
         setup_meta = meta or ctx.setup_meta
@@ -942,6 +1078,17 @@ def _rebuild_1d_section(data: Mapping, summary: Mapping, sg_true: Path) -> Optio
 
 def write_1d_figures(ctx: ReportContext, data: Mapping, summary: Mapping) -> None:
     sg_true = ctx.fwd_dir / "sg.rss"
+    if ctx.datasets:
+        ranked = [
+            Path(d["run_dir"]) / "sg.rss"
+            for d in sorted(
+                ctx.datasets,
+                key=lambda x: float(x["freq_hz"]) if x.get("freq_hz") is not None else -1.0,
+            )
+            if (Path(d["run_dir"]) / "sg.rss").exists()
+        ]
+        if ranked:
+            sg_true = ranked[-1]
     true_x = true_z = true_rho = None
     if sg_true.exists():
         true_x, true_z, true_rho = resistivity_from_sg_rss(sg_true)
@@ -1076,9 +1223,9 @@ def render_tex(ctx: ReportContext) -> str:
         r"\begin{document}",
         r"\maketitle",
         (
-            "This report snapshots the current workspace: forward-modelling setup, "
-            "modelled data, and any inversion runs that were present when the script ran. "
-            "It does not re-run modelling or inversion."
+            "This report snapshots the current workspace: the acquisition matrix "
+            "(every frequency and source), modelled data, and any inversion runs "
+            "that were present when the script ran. It does not re-run modelling or inversion."
         ),
         "",
         r"\section{Provenance}",
@@ -1087,6 +1234,7 @@ def render_tex(ctx: ReportContext) -> str:
                 ("Workshop root", ctx.root),
                 ("Generated", ctx.timestamp),
                 ("Included", included_txt),
+                ("Datasets", ", ".join(d["name"] for d in ctx.datasets) or None),
                 ("setup_metadata.json", _display_path(ctx.setup_meta_path, ctx.root)),
                 ("2D run", None if ctx.run_2d is None else ctx.run_2d.name),
                 ("1D run", None if ctx.run_1d is None else ctx.run_1d.name),
@@ -1100,34 +1248,50 @@ def render_tex(ctx: ReportContext) -> str:
         lines.append(_kv_table(rows))
         lines.append("")
     lines.append(r"\subsection{Model and wavelet}")
-    block = _include_fig(ctx, "fw_resistivity", "Forward resistivity model with transmitter and receiver locations.")
-    lines.append(block or _note_block("Resistivity model figure not available."))
-    block = _include_fig(ctx, "fw_wavelet", "Source wavelet in time and frequency.")
-    lines.append(block or _note_block("Wavelet figure not available."))
+    if ctx.fw_freq_sections:
+        for sec in ctx.fw_freq_sections:
+            lines.append(rf"\subsubsection{{{latex_escape(sec['title'])}}}")
+            block = _include_fig(
+                ctx,
+                sec.get("resistivity"),
+                f"Forward resistivity model at {sec['title']}, with transmitter and receiver locations.",
+            )
+            lines.append(block or _note_block(f"Resistivity model figure not available at {sec['title']}."))
+            block = _include_fig(
+                ctx,
+                sec.get("wavelet"),
+                f"Source wavelet in time and frequency at {sec['title']}.",
+            )
+            lines.append(block or _note_block(f"Wavelet figure not available at {sec['title']}."))
+    else:
+        lines.append(_note_block("Resistivity model figure not available."))
 
     lines.append(r"\section{Modelled data}")
-    block = _include_fig(
-        ctx,
-        "fw_amp_phase",
-        "Steady-state channel-gain amplitude and phase versus local receiver index for a mid-line transmitter. Colours are frequencies.",
-    )
-    lines.append(block or _note_block("Modelled amp/phase vs-rx figure not available."))
-    block = _include_fig(
-        ctx,
-        "fw_amp_phase_vs_tx",
-        "Steady-state channel-gain amplitude and phase versus transmitter index, with amplitude and phase rows for each receiver. Colours are frequencies.",
-    )
-    lines.append(block or _note_block("Modelled amp/phase vs-Tx figure not available."))
-    cal_rows, cal = collect_calibration_rows(ctx.setup_meta)
-    if cal:
+    if ctx.fw_freq_sections:
+        for sec in ctx.fw_freq_sections:
+            lines.append(rf"\subsection{{{latex_escape(sec['title'])}}}")
+            data_items = sec.get("data") or []
+            if not data_items:
+                lines.append(_note_block(f"Modelled amp/phase figures not available at {sec['title']}."))
+            for item in data_items:
+                block = _include_fig(ctx, item.get("rx_key"), item.get("caption") or "")
+                lines.append(block or "")
+                block = _include_fig(ctx, item.get("tx_key"), item.get("tx_caption") or "")
+                lines.append(block or "")
+    else:
+        lines.append(_note_block("Modelled amp/phase figures not available."))
+    if ctx.fw_calibrations:
         lines.append(r"\subsection{FDTD--analytic calibration}")
-        lines.append(_kv_table(cal_rows))
-        block = _include_fig(
-            ctx,
-            "fw_calibration",
-            "Global FDTD--analytic scale C(f) stored by Step 02.",
-        )
-        lines.append(block or _note_block("Calibration C(f) figure not available."))
+        for cal in ctx.fw_calibrations:
+            lines.append(rf"\subsubsection{{{latex_escape(cal['title'])}}}")
+            if cal.get("rows"):
+                lines.append(_kv_table(cal["rows"]))
+            block = _include_fig(
+                ctx,
+                cal.get("key"),
+                f"FDTD--analytic scale C(f) for the {cal['title']}.",
+            )
+            lines.append(block or _note_block(f"Calibration C(f) figure not available for {cal['title']}."))
     else:
         lines.append(_note_block("No FDTD--analytic calibration is stored in setup_metadata.json."))
 
@@ -1255,37 +1419,34 @@ def build_report(
     include_1d: bool = True,
     run_2d: Optional[str] = None,
     run_1d: Optional[str] = None,
-    dataset: Optional[str] = None,
     compile_pdf_flag: bool = False,
-    match_2d_to_dataset: bool = False,
 ) -> dict[str, Any]:
-    """Build the workflow report for ONE forward dataset.
+    """Build one workflow report for the whole workspace.
 
-    `dataset` names one entry of the acquisition matrix (`manifest.json`).
-    `cfg.fwd_2d_dir/setup_metadata.json` is NOT a dataset on a matrix workspace
-    - the datasets live in subdirectories - so a report that reads the forward
-    root describes whichever file it happens to find, or nothing. With a matrix
-    present and no `dataset` given this takes the first and records which, so
-    the report always says what it is about. Figures and the
-    .tex go to `report/<dataset>/` whenever a matrix exists, so building every
-    dataset does not have them overwrite each other.
+    The acquisition matrix, the selected 2D ladder and the selected 1D run
+    all go in `workspace/report/workflow_report.tex`. There is not a report
+    per frequency or per source.
     """
     root = (root or Path.cwd()).resolve()
     cfg = load_config(root)
 
     datasets = forward_datasets(root)
-    chosen = None
-    if datasets:
-        if dataset is not None:
-            chosen = next((d for d in datasets if d["name"] == dataset), None)
-            if chosen is None:
-                names = ", ".join(d["name"] for d in datasets)
-                raise ValueError(f"No dataset named {dataset!r}. Available: {names}")
-        else:
-            chosen = datasets[0]
-
-    is_matrix = len(datasets) > 1
-    fwd_dir = Path(chosen["run_dir"]) if chosen else cfg.fwd_2d_dir
+    if not datasets:
+        meta_path = setup_metadata_path(root=root)
+        if not meta_path.exists():
+            raise FileNotFoundError(
+                f"Missing setup_metadata.json under {cfg.fwd_2d_dir}. "
+                "Finalize Step 01 (Generate FD inputs) before making a report."
+            )
+        fwd_dir = Path(meta_path).parent
+        datasets = [{
+            "name": fwd_dir.name,
+            "run_dir": str(fwd_dir),
+            "freq_hz": None,
+            "source_field": "HX",
+            "meta": {},
+        }]
+    fwd_dir = Path(datasets[0]["run_dir"])
     meta_path = fwd_dir / "setup_metadata.json"
     if not meta_path.exists():
         raise FileNotFoundError(
@@ -1296,10 +1457,8 @@ def build_report(
         raise FileNotFoundError(f"Could not read setup metadata at {meta_path}")
 
     report_dir = cfg.workspace / "report"
-    if is_matrix and chosen is not None:
-        # Figure basenames are fixed, so several datasets can only coexist in
-        # separate directories.
-        report_dir = report_dir / str(chosen["name"])
+    if report_dir.exists():
+        shutil.rmtree(report_dir)
     figures_dir = report_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1312,21 +1471,14 @@ def build_report(
         report_dir=report_dir,
         figures_dir=figures_dir,
         timestamp=datetime.datetime.now().isoformat(timespec="seconds"),
-        match_2d_to_dataset=bool(match_2d_to_dataset),
+        datasets=list(datasets),
     )
-    if chosen is not None:
-        ctx.notes.append(
-            f"Forward dataset: {chosen['name']} (source={chosen['source_field']}, "
-            f"freq={chosen['freq_hz']}) at {_display_path(fwd_dir, root)}"
-            + (f"; {len(datasets)} datasets in the acquisition matrix" if is_matrix else "")
-        )
     if include_2d:
         ctx.run_2d = resolve_run_dir(cfg.inv_2d_runs_dir, run_2d, kind="2D", required=bool(run_2d))
     if include_1d:
         ctx.run_1d = resolve_run_dir(cfg.inv_1d_runs_dir, run_1d, kind="1D", required=bool(run_1d))
 
     write_fw_figures(ctx)
-    write_modelled_data_figures(ctx)
     if ctx.run_2d is not None:
         write_2d_figures(ctx)
     if ctx.run_1d is not None:
@@ -1352,7 +1504,6 @@ def build_report(
         "tex_path": tex_path,
         "pdf_path": pdf_path,
         "report_dir": report_dir,
-        "dataset": (chosen["name"] if chosen else None),
         "n_datasets": len(datasets),
         "figures": dict(ctx.figures),
         "notes": list(ctx.notes),

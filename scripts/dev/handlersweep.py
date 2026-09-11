@@ -56,7 +56,8 @@ NBS = ["01_fw_setup.ipynb", "02_fwmodelling_and_data_visualization.ipynb",
        "03_2d_inversion.ipynb", "04_2d_inversion_results.ipynb",
        "05_1d_inversion.ipynb", "06_1d_inversion_results.ipynb"]
 SKIP = {"on_quit_gui", "on_quit", "on_run_all", "on_run_inversion", "on_run_model",
-        "on_calibrate_all", "on_generate_inputs", "on_apply_outputs"}   # spawn work
+        "on_calibrate_all", "on_generate_inputs", "on_apply_outputs",
+        "on_generate_synthetics"}   # spawn work
 
 bad = []
 for nb in NBS:

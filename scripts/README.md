@@ -256,30 +256,24 @@ Other utilities:
   calibration, and 1D `REPORT.md` files are deleted.
 - `make_workshop_report.py`: write a LaTeX snapshot of the current workspace
   (`workspace/report/workflow_report.tex` plus PDF figures under
-  `workspace/report/figures/`). Requires Step 01 `setup_metadata.json`. 2D and
-  1D inversion sections are included only when a `Run{N}` directory exists
-  (latest by default). The 2D section is one ladder (`Run{N}/ladder.json` and
-  a subdirectory per frequency). `--all-datasets` pairs each dataset report
-  with the matching scale and source of that ladder. From the workshop root:
+  `workspace/report/figures/`). Requires Step 01 `setup_metadata.json`. One
+  report covers the whole acquisition matrix and the whole 2D ladder
+  (`Run{N}/ladder.json` and a subdirectory per frequency), plus the selected
+  1D run. There is not a report per frequency, source, or dataset. 2D and 1D
+  sections are included only when a `Run{N}` directory exists (latest by
+  default). From the workshop root:
 
   ```bash
   python scripts/make_workshop_report.py
   python scripts/make_workshop_report.py --compile
   python scripts/make_workshop_report.py --2d-run Run1 --1d-run Run0
   python scripts/make_workshop_report.py --no-2d --no-1d
-  ```
-
-  One report covers ONE forward dataset. On an acquisition-matrix workspace:
-
-  ```bash
   python scripts/make_workshop_report.py --list-datasets
-  python scripts/make_workshop_report.py --dataset f1000Hz_hx
-  python scripts/make_workshop_report.py --all-datasets   # report/<dataset>/ each
   ```
 
-  With no `--dataset` it takes the first and says so. `--all-datasets` writes a
-  subdirectory per dataset. 2D figure names inside one report are per scale and
-  source (`inv2d_models_f2000Hz.pdf`, `inv2d_data_f2000Hz_hx.pdf`).
+  Figure names are per scale and source (`inv2d_models_f2000Hz.pdf`,
+  `inv2d_data_f2000Hz_hx.pdf`, `fw_amp_phase_f2000Hz_hx.pdf`) so they coexist
+  in one report directory.
 
   The script does not re-run modelling or inversion. `--compile` runs
   `pdflatex` if it is on PATH. `./clean.sh` removes the report with `workspace/`.

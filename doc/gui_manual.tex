@@ -320,13 +320,13 @@ The explicit-engine MPI inversion binary must be installed: \texttt{mpiEminvTE2d
 
 \subsection{Purpose}
 
-View 2D inversion results of one multi-scale ladder: select a run (\texttt{RunN}) and a scale (frequency), view inverted resistivity with true-model comparison, resistivity slices (other scales overlaid), compare observed data with synthetics at that scale, and export selected iterates to SEG-Y.
+View 2D inversion results of one multi-scale ladder: select a run (\texttt{RunN}) and a scale (which inverted model: frequency of inversion plus iterate), view inverted resistivity with true-model comparison on that scale's grid, resistivity slices (other scales overlaid), compare observed data with synthetics at any frequency $\times$ source $\times$ receiver, generate synthetics for every frequency from the selected iterate, and export selected iterates to SEG-Y.
 
 \subsection{Parameters (physical meaning and impact)}
 
 \begin{itemize}
 
-  \item \textbf{Run, Scale, Iterate} — Which multi-scale ladder under \texttt{workspace/2D/inversion/}, which frequency of that ladder, and which model file of that scale (\texttt{sg0}, \texttt{sg\_ls}, \texttt{sg\_up.rss-N}). Frequency is the scale selector.
+  \item \textbf{Run, Scale, Iterate} — Which multi-scale ladder under \texttt{workspace/2D/inversion/}, which inverted model of that ladder (frequency of inversion), and which iterate of that scale (\texttt{sg0}, \texttt{sg\_ls}, \texttt{sg\_up.rss-N}). Scale chooses the model shown on the Models tab, including the true-model grid. Frequency of the gather is the view selector on the Data tab.
 
   \item \textbf{Export selected model to SEGY} — Writes to \texttt{workspace/2D/results/RunN/<scale>/} using the setup SEG-Y as a template. Interpolates to template geometry if needed.
 
@@ -334,9 +334,9 @@ View 2D inversion results of one multi-scale ladder: select a run (\texttt{RunN}
 
   \item \textbf{x (m), z (m)} — Slice positions. The depth plot also overlays the other scales of the same ladder.
 
-  \item \textbf{Load real data / Load synthetics from run / Generate synthetics from model} — Data comparison options. \textbf{Generate synthetics} runs FD for the selected iterate using \texttt{nproc} MPI processes. It always refreshes \texttt{ep.rss} from the scale's forward dataset and checks that its permittivity matches \texttt{eps\_r\_used} in that dataset's \texttt{setup\_metadata.json}.
+  \item \textbf{Load real data / Load synthetics from run / Generate synthetics from model} — Data comparison options. \textbf{Generate synthetics} runs FD for the selected iterate at every frequency of the acquisition matrix, resampling that iterate onto each frequency's grid (the earth model is not a single-tone gather), using \texttt{nproc} MPI processes. It refreshes \texttt{ep.rss} from each frequency's forward dataset and checks that permittivity matches \texttt{eps\_r\_used} in that dataset's \texttt{setup\_metadata.json}.
 
-  \item \textbf{view, plot, tx, local rx, trace idx} — Display selectors on the Data tab. \textbf{view} is source $\times$ receiver at the selected scale's frequency (\texttt{Kx $\rightarrow$ Hx (Cxx)}).
+  \item \textbf{view, plot, tx, local rx, trace idx} — Display selectors on the Data tab. \textbf{view} is frequency $\times$ source $\times$ receiver of the acquisition matrix (\texttt{2000 Hz . Kx $\rightarrow$ Hx (Cxx)}). Observed and synthetic gathers follow this view, which may be a different frequency from the scale.
 
   \item \textbf{Quit GUI server} — Stops Voila.
 

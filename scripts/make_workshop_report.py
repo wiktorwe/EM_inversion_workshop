@@ -2,8 +2,8 @@
 """Generate a LaTeX workflow report from the current workshop workspace.
 
 Run from the workshop root (or pass --root). Requires Step 01
-``setup_metadata.json``. 2D/1D inversion sections are included only when
-matching ``Run{N}`` directories exist.
+``setup_metadata.json``. Writes one report for the whole acquisition matrix
+and the selected 2D ladder / 1D run.
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ from scripts.modules.workshop_config import load_config  # noqa: E402
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Write a LaTeX report of the forward setup, modelled data, and any "
-            "available 2D/1D inversion results under workspace/."
+            "Write one LaTeX report of the acquisition matrix, modelled data, "
+            "and any 2D/1D inversion results under workspace/."
         ),
     )
     parser.add_argument(
@@ -42,7 +42,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--2d-run",
         dest="run_2d",
         default=None,
-        help="2D inversion run to include (RunN, N, or a directory). Default: latest.",
+        help="2D inversion ladder to include (RunN, N, or a directory). Default: latest.",
     )
     parser.add_argument(
         "--1d-run",
@@ -61,22 +61,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Omit the 1D inversion section even if a run exists.",
     )
     parser.add_argument(
-        "--dataset",
-        default=None,
-        help=(
-            "Forward dataset of the acquisition matrix to report on, by name "
-            "(see --list-datasets). Default: the first one."
-        ),
-    )
-    parser.add_argument(
-        "--all-datasets",
-        action="store_true",
-        help="Write one report per dataset, into workspace/report/<dataset>/.",
-    )
-    parser.add_argument(
         "--list-datasets",
         action="store_true",
-        help="List the forward datasets available to report on, then exit.",
+        help="List the forward datasets in the acquisition matrix, then exit.",
     )
     return parser.parse_args(argv)
 
@@ -98,44 +85,21 @@ def main(argv: list[str] | None = None) -> int:
                   f"freq={d['freq_hz']}  {d['run_dir']}")
         return 0
 
-    if args.all_datasets and args.dataset:
-        print("ERROR: pass --dataset or --all-datasets, not both", file=sys.stderr)
+    try:
+        result = build_report(
+            root=root,
+            include_2d=not args.no_2d,
+            include_1d=not args.no_1d,
+            run_2d=args.run_2d,
+            run_1d=args.run_1d,
+            compile_pdf_flag=bool(args.compile),
+        )
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-
-    wanted = ([d["name"] for d in datasets] if args.all_datasets and datasets
-              else [args.dataset])
-
-    results = []
-    for name in wanted:
-        try:
-            results.append(build_report(
-                root=root,
-                include_2d=not args.no_2d,
-                include_1d=not args.no_1d,
-                run_2d=args.run_2d,
-                run_1d=args.run_1d,
-                dataset=name,
-                compile_pdf_flag=bool(args.compile),
-                match_2d_to_dataset=bool(args.all_datasets),
-            ))
-        except FileNotFoundError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
-        except Exception as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
-
-    if len(results) > 1:
-        for r in results:
-            print(f"Wrote {r['tex_path']}  (dataset {r['dataset']})")
-        print(f"\n{len(results)} dataset report(s) written.")
-        return 0
-
-    result = results[0]
-    if result.get("n_datasets", 0) > 1:
-        print(f"Reporting on dataset {result['dataset']!r} of "
-              f"{result['n_datasets']} in the acquisition matrix "
-              f"(use --dataset or --all-datasets to change this).")
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
     tex_path = result["tex_path"]
     pdf_path = result["pdf_path"]
@@ -143,6 +107,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Wrote {tex_path}")
     nfig = len(result["figures"])
     print(f"Wrote {nfig} figure(s) under {report_dir / 'figures'}")
+    n_ds = result.get("n_datasets") or 0
+    if n_ds:
+        print(f"Acquisition matrix: {n_ds} dataset(s).")
     if result["run_2d"] is not None:
         print(f"Included 2D inversion: {Path(result['run_2d']).name}")
     else:

@@ -367,6 +367,8 @@ same edit that caused it:
 | Added per-frequency interface snapping | the empymod fallback branch still forwarded the UNSNAPPED thickness, silently modelling a different Earth than the main path | follow the new argument into every branch, including error paths - this is the second time that exact branch has been missed |
 | Made each 2D `Run{N}` one frequency | Step 04 listed Run0/Run1/Run2 with no tone or ladder, and the report compared the latest Run to the first forward dataset | a ladder is one attempt: `find_next_run_dir` was inside the frequency loop and `dataset.txt` lived at the Run root |
 | Made each 2D `Run{N}` a multi-scale ladder (`ladder.json` + scale subdirs) | Step 04 still listed folder names, progress parsers looked at the Run root, the report took `sg_up` at that root, tensorsweep looked for `inv.cfg` there | `iter_stages` is the one reader; no `inv.cfg`-at-root fallback; old one-frequency trees were deleted rather than dual-format |
+| Made the workshop report one document for the whole ladder | `--all-datasets` was writing `report/<dataset>/` and the default was the first forward dataset | one `make_workshop_report.py` writes `workspace/report/`; `--all-datasets`, `--dataset` and `match_2d_to_dataset` were deleted |
+| Decoupled Step 04 scale from the data view | the view was source x receiver at the scale frequency, so Generate synthetics modelled one tone and a 2 kHz iterate could not be compared to a 6 kHz gather | Scale is the inverted model; view is frequency x source x receiver; Generate synthetics resamples the iterate onto every frequency's grid |
 
 ### Duplication is how chains rot
 
@@ -609,13 +611,18 @@ previous one; every arrow is a place a change can break something.
 - **imports** `fd_visualization`, `headless`, `inversion`, `multiscale_2d`, `rockem_bridge`, `segy`, `setup_defaults`
 - **reads** `Run{N}/` models + the forward data + `setup_metadata.json`
   (frequencies, `n_periods_extract`, SEG-Y template geometry)
-- **writes** `workspace/2D/results/Run{N}/` SEG-Y exports
+- **writes** `workspace/2D/results/Run{N}/` SEG-Y exports, and QC synthetics into `Run{N}/pred/<scale>_iterNNN/<dataset>/` (does not overwrite engine `data_mod_*` in other stages)
 - **key chain fact** it has TWO code cells - setup and GUI. Shared chrome is
-  the ladder (`Run:`) and the scale (frequency of that ladder). Tabs split
-  Models from Data so the view selector sits next to the gather plot. Scale
-  rebinds `DS` to that tone's forward group; the view dropdown is source x
-  receiver at that frequency only. Export writes
-  `workspace/2D/results/Run{N}/<stage>/`.
+  the ladder (`Run:`) and the scale (which inverted model: frequency of
+  inversion plus iterate). Tabs split Models from Data so the view selector
+  sits next to the gather plot. Scale selects the inverted model; the true
+  model on the Models tab follows that scale's grid. The view dropdown is
+  every frequency x source x receiver of the acquisition matrix, independent
+  of the scale. Observed and synthetic gathers on the Data tab follow the
+  view, which may be a different frequency. Generate synthetics from a
+  selected iterate predicts ALL frequencies: the earth model is not a
+  single-tone gather, so the iterate is resampled onto each frequency's
+  grid. Export writes `workspace/2D/results/Run{N}/<stage>/`.
 
 ### Step 05 - 1D layered inversion
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
@@ -663,14 +670,11 @@ previous one; every arrow is a place a change can break something.
 
 ### Out of band
 `scripts/make_workshop_report.py` -> `workshop_report.py` reads the whole
-workspace and writes `workspace/report/workflow_report.tex` + figures. It reads
-`setup_metadata.json` and the calibration, so metadata changes reach it too. It
-reports on ONE forward dataset: `--dataset NAME`, `--all-datasets` (one report
-per dataset under `report/<dataset>/`, because the figure basenames are fixed),
-`--list-datasets`. Every report names the dataset it is about. The 2D section
-is a LADDER: `--2d-run RunN` means `Run{N}/ladder.json` and every scale
-subdirectory; `--all-datasets` pairs each dataset report with the matching
-scale and source of that ladder.
+workspace and writes **one** `workspace/report/workflow_report.tex` + figures.
+It covers the acquisition matrix (every frequency and source), the selected
+2D ladder (`--2d-run RunN` means `Run{N}/ladder.json` and every scale), and
+the selected 1D run. There is not a report per frequency, source, or dataset.
+`--list-datasets` lists the matrix and exits.
 
 ### THE PATH-BINDING CONTRACT (this is a link, and it was missing here)
 
@@ -826,13 +830,14 @@ all of `scripts/experiments/`}
   04 passes its view's. Reading the Kx pair for a Czx view is not a NameError, a
   bad path or a false sentence, so the other four sweeps PASS while the panel
   mislabels half the tensor. It shipped that way once.
-- **The scale and the view must agree on the frequency.** Each scale inverts
+- **Scale is the inverted model; view is the gather.** Each scale inverts
   ONE tone; `Run{N}/<freq>/dataset.txt` records which, and `ladder.json` lists
   every scale of that attempt. Step 03 reads it for the true model it plots
-  (per-frequency grids differ, and the colour limits come from it) and Step 04
-  pins frequency with the Scale selector. Without that link a 2 kHz scale is
-  compared against a 6 kHz view and the phasor is extracted at a tone the
-  record does not carry.
+  (per-frequency grids differ, and the colour limits come from it). Step 04's
+  Models tab follows the SCALE's grid for the true model; observed and
+  synthetic gathers on the Data tab follow the VIEW, which may be a different
+  frequency. Generate synthetics resamples the selected iterate onto each
+  frequency's grid, because the earth model is not a single-tone gather.
 - **Step 03 is a frequency ladder in one `Run{N}`.** Each frequency after the
   first starts from `Results/sg_up.rss-<iter>` of the previous **scale
   subdirectory**, resampled onto this frequency's grid by

@@ -192,11 +192,15 @@ def check_notebook_04(run_dir: Path, sources: list[str]) -> None:
 
     combos = g["state"]["view_combos"]
     per_view = {}
-    for i, k in enumerate(combos):
+    for k in combos:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            g["view_combo"].value = i
-            hx, hz = g["get_real_data_paths"](run_dir, source_field=g["view_source"]())
+            g["view_combo"].value = g["_view_value"](k)
+            g["on_dataset_change"]()
+            obs_dir = g["view_observed_dir"]()
+            hx, hz = g["get_real_data_paths"](obs_dir, source_field=g["view_source"]())
             label = g["view_component_label"]()
+            shown = g["view_combination_label"](
+                k.get("freq_hz"), k["source_field"], k["receiver"])
         rec = k["receiver"]
         want_label = LABEL[(k["source_field"], rec)]
         if label != want_label:
@@ -204,12 +208,25 @@ def check_notebook_04(run_dir: Path, sources: list[str]) -> None:
         chosen = hx if rec == "Hx" else hz
         want = staged_record_name(k["source_field"], "HX" if rec == "Hx" else "HZ",
                                   len(sources) > 1)
-        per_view.setdefault(want_label, chosen.name)
+        vid = (k.get("freq_hz"), want_label)
+        per_view[vid] = str(Path(chosen).resolve())
         if chosen.name != want:
-            fail(f"Step 04 view {want_label} reads {chosen.name!r}, expected {want!r}")
+            fail(f"Step 04 view {shown} reads {chosen.name!r}, expected {want!r}")
+        freq = k.get("freq_hz")
+        if freq is not None:
+            tone = f"{float(freq):.0f}"
+            folder = str(chosen.parent)
+            if tone not in folder and tone not in chosen.name:
+                fail(f"Step 04 view {shown} at {tone} Hz reads {chosen} "
+                     f"which does not name that tone")
+            if (tone not in str(run_dir)
+                    and Path(chosen.parent).resolve() == Path(run_dir).resolve()):
+                fail(f"Step 04 {tone} Hz view still reads joint stage {run_dir.name}")
     if len(set(per_view.values())) == len(per_view):
-        ok(f"Step 04: all {len(per_view)} tensor views read distinct files: "
-           + ", ".join(f"{k}={v}" for k, v in sorted(per_view.items())))
+        ok(f"Step 04: all {len(per_view)} views read distinct files")
+    n_freq = len({k.get("freq_hz") for k in combos if k.get("freq_hz") is not None})
+    if n_freq > 1:
+        ok(f"Step 04 view list covers {n_freq} frequencies of the acquisition matrix")
 
 
 def check_run_model_link() -> None:
@@ -217,8 +234,9 @@ def check_run_model_link() -> None:
 
     Every frequency is modelled on its own grid, so `sg.rss` is a different
     array per dataset. Step 03 plots the true model beside the inversion and
-    takes its colour limits from it; Step 04 rebinds `DS` from the selected
-    scale. Both must follow the selected stage.
+    takes its colour limits from it; Step 04 uses `scale_true_sg()` on the
+    Models tab (Scale does not rebind `DS` — `DS` follows the Data view).
+    Both must follow the selected stage.
     """
     ladders = [p for _, p in list_run_dirs(load_config().inv_2d_runs_dir)]
     stages = []
@@ -253,11 +271,15 @@ def check_run_model_link() -> None:
             g4["refresh_scale_options"]()
             g4["scale_selector"].value = str(st["path"])
             g4["on_scale_selected"]({"name": "value", "new": str(st["path"])})
-            tm4 = g4["DS"].sg
+            tm4 = g4["scale_true_sg"]()
+        if tm4 is None:
+            fail(f"Step 04: scale {st['path'].name} ({tag}Hz) has no true model")
+            bad += 1
+            tm4 = Path("missing")
         for step, tm in (("03", tm3), ("04", tm4)):
-            if tag not in tm.parent.name:
+            if tag not in Path(tm).parent.name:
                 fail(f"Step {step}: scale {st['path'].name} ({tag}Hz) reads true model "
-                     f"{tm.parent.name}/sg.rss")
+                     f"{Path(tm).parent.name}/sg.rss")
                 bad += 1
     if not bad:
         ok(f"run -> true model: all {len(stages)} scales read their own dataset in Steps 03 and 04")

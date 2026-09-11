@@ -183,7 +183,7 @@ Example resistivity model: `examples/Fault_1.sgy` (load in step 01).
      the previous inverted model) and monitor progress.
 
 4. **Step 04 — 2D inversion results**
-   - Pick the ladder and the scale, compare models and data, export SEG-Y.
+   - Pick the ladder and the scale (which inverted model). Models follow that scale's grid; the Data view is every frequency × source × receiver. Generate synthetics from an iterate predicts every frequency. Export SEG-Y.
 
 5. **Steps 05–06 — 1D inversion and results**
    - Step 05 defaults freqs / `n_periods` / rho bounds from setup metadata; each run writes `REPORT.md`.
@@ -305,8 +305,8 @@ listing them.
 way to run less than all of it.** Step 02 models, extracts and calibrates every
 dataset in one action each; Step 03 stages and runs every dataset's inversion
 sequentially; Step 05 fits every frequency and every available tensor component
-in one inversion; `make_workshop_report.py --all-datasets` writes a report per
-dataset. Headless, the whole matrix is one command:
+in one inversion; `make_workshop_report.py` writes one report for the whole
+matrix and the 2D ladder. Headless, the whole matrix is one command:
 
 ```bash
 python scripts/run_matrix.py            # model + calibrate every dataset
@@ -336,8 +336,9 @@ Step 05 consumes the **whole** matrix: every per-frequency dataset contributes
 the one tone it was designed for, both sources contribute their two tensor
 components, and the inversion fits them together. Step 03 consumes it a
 frequency at a time, both sources at once, handing each inverted model to the
-next frequency as the starting model. Steps 04 and 06 look at one result at
-a time by nature.
+next frequency as the starting model. Step 04 inspects one ladder: the scale
+is which inverted model, and the Data view is every frequency × source ×
+receiver. Step 06 looks at one 1D run.
 
 Each per-frequency dataset has its own grid and so its own calibration, and
 Step 05 assembles C per frequency to match. Worth knowing when reading those
