@@ -165,6 +165,16 @@ def _freq_list(gains: Mapping) -> np.ndarray:
     return np.asarray(gains.get("freqs", gains.get("Hx", {}).get("freqs", [])), dtype=float)
 
 
+def _gain_items(obs, syn) -> list[tuple[Mapping, Mapping]]:
+    """One (obs, syn) pair, or one pair per frequency when the report stacks scales."""
+    if isinstance(obs, Mapping) and "Hx" in obs:
+        return [(obs, syn)]
+    items = [(o, s) for o, s in zip(obs, syn)]
+    if not items:
+        raise ValueError("No observed-vs-synthetic pairs")
+    return items
+
+
 def _rx_local(geo: Mapping) -> np.ndarray:
     return np.asarray(geo.get("rx_local_idx_per_trace", geo.get("rx_idx_per_trace")), dtype=int)
 
@@ -482,20 +492,34 @@ def save_2d_slices_figure(
     return _save(fig, path)
 
 
+def _traces_for_tx(gains: Mapping, tx_id: int) -> tuple[int, np.ndarray, np.ndarray]:
+    """Trace subset for `tx_id`, falling back to that gather's mid transmitter."""
+    try:
+        idx, rx = _trace_subset(gains, tx_id)
+        return tx_id, idx, rx
+    except ValueError:
+        fallback = _mid_index(np.asarray(gains["geometry"]["tx_idx_per_trace"], dtype=int))
+        idx, rx = _trace_subset(gains, fallback)
+        return fallback, idx, rx
+
+
 def save_obs_vs_syn_figure(
-    obs: Mapping,
-    syn: Mapping,
+    obs: Mapping | Sequence[Mapping],
+    syn: Mapping | Sequence[Mapping],
     path: Path,
     *,
     tx_id: Optional[int] = None,
 ) -> Path:
-    geo = obs["geometry"]
-    tx = np.asarray(geo["tx_idx_per_trace"], dtype=int)
+    """Hx/Hz observed vs synthetic vs rx, all frequencies overplotted.
+
+    `obs`/`syn` are one gains dict, or a sequence of them (one per frequency)
+    when each ladder scale has its own gather geometry.
+    """
+    items = _gain_items(obs, syn)
+    geo0 = items[0][0]["geometry"]
     if tx_id is None:
-        tx_id = _mid_index(tx)
-    idx, rx = _trace_subset(obs, tx_id)
-    freqs = _freq_list(obs)
-    nfreq = int(freqs.size)
+        tx_id = _mid_index(np.asarray(geo0["tx_idx_per_trace"], dtype=int))
+    plotted_tx, _, _ = _traces_for_tx(items[0][0], tx_id)
     fig, axes = _fig_axes(2, 2, (9.2, 6.6), sharex=True)
     specs = (
         (axes[0, 0], "Hx", "amp_mean", "Hx amplitude", False),
@@ -505,14 +529,18 @@ def save_obs_vs_syn_figure(
     )
     cmap = plt.cm.tab10
     for ax, comp, key, title, is_phase in specs:
-        o = np.asarray(obs[comp][key], dtype=float)
-        s = np.asarray(syn[comp][key], dtype=float)
-        for fi, f in enumerate(freqs):
-            color = cmap(fi % 10)
-            yo = np.rad2deg(o[fi, idx]) if is_phase else o[fi, idx]
-            ys = np.rad2deg(s[fi, idx]) if is_phase else s[fi, idx]
-            ax.plot(rx, yo, "-", color=color, lw=1.1, label=f"{f:g} Hz obs" if nfreq <= 6 else None)
-            ax.plot(rx, ys, "--", color=color, lw=1.1, label=f"{f:g} Hz syn" if nfreq <= 6 else None)
+        color_i = 0
+        for obs_i, syn_i in items:
+            _used_tx, idx, rx = _traces_for_tx(obs_i, tx_id)
+            o = np.asarray(obs_i[comp][key], dtype=float)
+            s = np.asarray(syn_i[comp][key], dtype=float)
+            for fi, f in enumerate(_freq_list(obs_i)):
+                color = cmap(color_i % 10)
+                yo = np.rad2deg(o[fi, idx]) if is_phase else o[fi, idx]
+                ys = np.rad2deg(s[fi, idx]) if is_phase else s[fi, idx]
+                ax.plot(rx, yo, "-", color=color, lw=1.1, label=f"{f:g} Hz obs")
+                ax.plot(rx, ys, "--", color=color, lw=1.1, label=f"{f:g} Hz syn")
+                color_i += 1
         ax.set_title(title)
         if is_phase:
             _apply_phase_ylim(ax)
@@ -523,21 +551,27 @@ def save_obs_vs_syn_figure(
     axes[1, 1].set_xlabel("Local rx index")
     fig.set_constrained_layout_pads(w_pad=0.06, h_pad=0.04, wspace=0.06, hspace=0.08)
     _legend_below(fig, *axes[0, 0].get_legend_handles_labels(), ncol=4)
-    fig.suptitle(f"Observed vs synthetic vs rx (Tx {tx_id}; solid=obs, dashed=syn)", fontsize=11)
+    fig.suptitle(f"Observed vs synthetic vs rx (Tx {plotted_tx}; solid=obs, dashed=syn)", fontsize=11)
     return _save(fig, path)
 
 
 def save_obs_vs_syn_vs_tx_figure(
-    obs: Mapping,
-    syn: Mapping,
+    obs: Mapping | Sequence[Mapping],
+    syn: Mapping | Sequence[Mapping],
     path: Path,
     *,
     max_rx: int = _MAX_RX_PANELS,
 ) -> Path:
-    rx_ids = _pick_ids(_rx_local(obs["geometry"]), max_rx)
-    if rx_ids.size == 0:
+    """Hx/Hz observed vs synthetic vs Tx, all frequencies overplotted."""
+    items = _gain_items(obs, syn)
+    rx_ids = None
+    for obs_i, _syn_i in items:
+        cand = _pick_ids(_rx_local(obs_i["geometry"]), max_rx)
+        if cand.size:
+            rx_ids = cand
+            break
+    if rx_ids is None or rx_ids.size == 0:
         raise ValueError("No receiver indices for observed-vs-synthetic vs Tx")
-    freqs = _freq_list(obs)
     nrx = int(rx_ids.size)
     fig, axes = _fig_axes(2 * nrx, 2, _vs_tx_figsize(nrx), sharex=True)
     axes = np.atleast_2d(axes)
@@ -549,17 +583,24 @@ def save_obs_vs_syn_vs_tx_figure(
     )
     cmap = plt.cm.tab10
     for ri, rx_id in enumerate(rx_ids):
-        idx, tx = _tx_subset(obs, int(rx_id))
         for ci, comp, key, is_phase, title in specs:
             ax = axes[2 * ri + int(is_phase), ci]
-            o = np.asarray(obs[comp][key], dtype=float)
-            s = np.asarray(syn[comp][key], dtype=float)
-            for fi, f in enumerate(freqs):
-                color = cmap(fi % 10)
-                yo = np.rad2deg(o[fi, idx]) if is_phase else o[fi, idx]
-                ys = np.rad2deg(s[fi, idx]) if is_phase else s[fi, idx]
-                ax.plot(tx, yo, "-", color=color, lw=1.1, marker="o", ms=3.0, label=f"{f:g} Hz obs")
-                ax.plot(tx, ys, "--", color=color, lw=1.1, marker="s", ms=2.5, label=f"{f:g} Hz syn")
+            color_i = 0
+            for obs_i, syn_i in items:
+                try:
+                    idx, tx = _tx_subset(obs_i, int(rx_id))
+                except ValueError:
+                    color_i += int(_freq_list(obs_i).size)
+                    continue
+                o = np.asarray(obs_i[comp][key], dtype=float)
+                s = np.asarray(syn_i[comp][key], dtype=float)
+                for fi, f in enumerate(_freq_list(obs_i)):
+                    color = cmap(color_i % 10)
+                    yo = np.rad2deg(o[fi, idx]) if is_phase else o[fi, idx]
+                    ys = np.rad2deg(s[fi, idx]) if is_phase else s[fi, idx]
+                    ax.plot(tx, yo, "-", color=color, lw=1.1, marker="o", ms=3.0, label=f"{f:g} Hz obs")
+                    ax.plot(tx, ys, "--", color=color, lw=1.1, marker="s", ms=2.5, label=f"{f:g} Hz syn")
+                    color_i += 1
             if is_phase:
                 _apply_phase_ylim(ax)
             ax.tick_params(labelsize=8)

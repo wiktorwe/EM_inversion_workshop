@@ -674,7 +674,9 @@ workspace and writes **one** `workspace/report/workflow_report.tex` + figures.
 It covers the acquisition matrix (every frequency and source), the selected
 2D ladder (`--2d-run RunN` means `Run{N}/ladder.json` and every scale), and
 the selected 1D run. There is not a report per frequency, source, or dataset.
-`--list-datasets` lists the matrix and exits.
+2D observed-versus-synthetic figures overplot every ladder frequency on one
+axes pair per source (`inv2d_data_{src}.pdf`); model/slice figures stay per
+scale. `--list-datasets` lists the matrix and exits.
 
 ### THE PATH-BINDING CONTRACT (this is a link, and it was missing here)
 

@@ -117,6 +117,7 @@ class ReportContext:
     notes: list[str] = field(default_factory=list)
     figures: dict[str, Path] = field(default_factory=dict)
     inv2d_sections: list[dict[str, Any]] = field(default_factory=list)
+    inv2d_data: list[dict[str, Any]] = field(default_factory=list)
     fw_freq_sections: list[dict[str, Any]] = field(default_factory=list)
     fw_calibrations: list[dict[str, Any]] = field(default_factory=list)
     datasets: list[dict[str, Any]] = field(default_factory=list)
@@ -877,6 +878,63 @@ def write_fw_figures(ctx: ReportContext) -> None:
         ctx.fw_calibrations.append(item)
 
 
+def _obs_syn_gains_for_stage(
+    ctx: ReportContext,
+    stage_dir: Path,
+    src: str,
+    tag: str,
+    setup_meta: Mapping,
+    fwd_dir: Optional[Path],
+) -> Optional[tuple[dict, dict]]:
+    """Channel-gain obs/syn for one ladder scale and source, or None."""
+    freqs = setup_meta.get("flist_hz") or []
+    if not freqs:
+        ctx.notes.append(
+            f"2D data comparison skipped for {tag} {src}: missing gathers, wavelet, or frequencies."
+        )
+        return None
+    f_min = float(setup_meta.get("f_min_hz") or min(float(v) for v in freqs))
+    n_periods = float(setup_meta.get("n_periods_extract") or 3.0)
+    wav = stage_dir / "wav2d.rss"
+    if not wav.exists() and fwd_dir is not None:
+        wav = fwd_dir / str(setup_meta.get("forward_wavelet") or "wav2d.rss")
+    pairs = available_synthetic_pairs(stage_dir, source_field=src)
+    obs_files = find_observed_records(stage_dir, source_field=src)
+    if not pairs:
+        ctx.notes.append(
+            f"2D observed-vs-synthetic skipped for {tag} {src}: no modelled pair."
+        )
+        return None
+    if not obs_files:
+        ctx.notes.append(
+            f"2D observed-vs-synthetic skipped for {tag} {src}: no observed records."
+        )
+        return None
+    _, hx_syn, hz_syn = pairs[-1]
+    hx_obs = obs_files.get("HX")
+    hz_obs = obs_files.get("HZ")
+    if (
+        hx_obs is None or hz_obs is None
+        or not hx_obs.exists() or not hz_obs.exists()
+        or not wav.exists()
+    ):
+        ctx.notes.append(
+            f"2D data comparison skipped for {tag} {src}: missing gathers, wavelet, or frequencies."
+        )
+        return None
+    try:
+        obs = compute_gains_for_fd_outputs(
+            hx_obs, hz_obs, wav, freqs=freqs, f_min_hz=f_min, n_periods_extract=n_periods
+        )
+        syn = compute_gains_for_fd_outputs(
+            hx_syn, hz_syn, wav, freqs=freqs, f_min_hz=f_min, n_periods_extract=n_periods
+        )
+    except Exception as exc:
+        ctx.notes.append(f"2D data comparison skipped for {tag} {src}: {exc}")
+        return None
+    return obs, syn
+
+
 def write_2d_figures(ctx: ReportContext) -> None:
     run_dir = ctx.run_2d
     assert run_dir is not None
@@ -885,6 +943,8 @@ def write_2d_figures(ctx: ReportContext) -> None:
         return
     fwd_root = ctx.cfg.fwd_2d_dir
     ctx.inv2d_sections = []
+    ctx.inv2d_data = []
+    by_src: dict[str, list[tuple[float, dict, dict]]] = {}
     for stage in stages:
         stage_dir = Path(stage["path"])
         freq = float(stage["freq_hz"])
@@ -900,7 +960,6 @@ def write_2d_figures(ctx: ReportContext) -> None:
             ],
             "models": None,
             "slices": None,
-            "data": [],
         }
         if sg_up is None or sg_true is None or not sg_true.exists():
             if sg_up is None:
@@ -948,74 +1007,45 @@ def write_2d_figures(ctx: ReportContext) -> None:
         if not sources:
             sources = ["HX"]
         setup_meta = meta or ctx.setup_meta
-        freqs = setup_meta.get("flist_hz") or []
-        f_min = float(setup_meta.get("f_min_hz") or (min(float(v) for v in freqs) if freqs else 0.0))
-        n_periods = float(setup_meta.get("n_periods_extract") or 3.0)
-        wav = stage_dir / "wav2d.rss"
-        if not wav.exists() and fwd_dir is not None:
-            wav = fwd_dir / str(setup_meta.get("forward_wavelet") or "wav2d.rss")
         for src in sources:
-            src_tag = src.lower()
-            pairs = available_synthetic_pairs(stage_dir, source_field=src)
-            obs_files = find_observed_records(stage_dir, source_field=src)
-            if not pairs:
-                ctx.notes.append(
-                    f"2D observed-vs-synthetic skipped for {tag} {src}: no modelled pair."
-                )
-                continue
-            if not obs_files:
-                ctx.notes.append(
-                    f"2D observed-vs-synthetic skipped for {tag} {src}: no observed records."
-                )
-                continue
-            _, hx_syn, hz_syn = pairs[-1]
-            hx_obs = obs_files.get("HX")
-            hz_obs = obs_files.get("HZ")
-            if (
-                hx_obs is None or hz_obs is None
-                or not hx_obs.exists() or not hz_obs.exists()
-                or not wav.exists() or not freqs
-            ):
-                ctx.notes.append(
-                    f"2D data comparison skipped for {tag} {src}: missing gathers, wavelet, or frequencies."
-                )
-                continue
-            try:
-                obs = compute_gains_for_fd_outputs(
-                    hx_obs, hz_obs, wav, freqs=freqs, f_min_hz=f_min, n_periods_extract=n_periods
-                )
-                syn = compute_gains_for_fd_outputs(
-                    hx_syn, hz_syn, wav, freqs=freqs, f_min_hz=f_min, n_periods_extract=n_periods
-                )
-            except Exception as exc:
-                ctx.notes.append(f"2D data comparison skipped for {tag} {src}: {exc}")
-                continue
-            c_hx = COMPONENT_BY_SOURCE_RECEIVER.get((src, "HX"), "Hx")
-            c_hz = COMPONENT_BY_SOURCE_RECEIVER.get((src, "HZ"), "Hz")
-            src_lab = SOURCE_LABELS.get(src, src)
-            data_key = f"inv2d_data_{tag}_{src_tag}"
-            tx_key = f"inv2d_data_vs_tx_{tag}_{src_tag}"
-            _try_figure(
-                ctx, data_key, save_obs_vs_syn_figure, obs, syn,
-                ctx.figures_dir / f"{data_key}.pdf",
+            pair = _obs_syn_gains_for_stage(
+                ctx, stage_dir, src, tag, setup_meta, fwd_dir,
             )
-            _try_figure(
-                ctx, tx_key, save_obs_vs_syn_vs_tx_figure, obs, syn,
-                ctx.figures_dir / f"{tx_key}.pdf",
-            )
-            section["data"].append({
-                "rx_key": data_key,
-                "tx_key": tx_key,
-                "caption": (
-                    f"Observed versus synthetic {c_hx}/{c_hz} channel gains "
-                    f"({src_lab} source) at {freq:g} Hz."
-                ),
-                "tx_caption": (
-                    f"Observed versus synthetic {c_hx}/{c_hz} versus transmitter "
-                    f"({src_lab} source) at {freq:g} Hz."
-                ),
-            })
+            if pair is None:
+                continue
+            by_src.setdefault(src, []).append((freq, pair[0], pair[1]))
         ctx.inv2d_sections.append(section)
+
+    for src, triples in by_src.items():
+        triples.sort(key=lambda t: t[0])
+        obs_list = [t[1] for t in triples]
+        syn_list = [t[2] for t in triples]
+        src_tag = src.lower()
+        c_hx = COMPONENT_BY_SOURCE_RECEIVER.get((src, "HX"), "Hx")
+        c_hz = COMPONENT_BY_SOURCE_RECEIVER.get((src, "HZ"), "Hz")
+        src_lab = SOURCE_LABELS.get(src, src)
+        data_key = f"inv2d_data_{src_tag}"
+        tx_key = f"inv2d_data_vs_tx_{src_tag}"
+        _try_figure(
+            ctx, data_key, save_obs_vs_syn_figure, obs_list, syn_list,
+            ctx.figures_dir / f"{data_key}.pdf",
+        )
+        _try_figure(
+            ctx, tx_key, save_obs_vs_syn_vs_tx_figure, obs_list, syn_list,
+            ctx.figures_dir / f"{tx_key}.pdf",
+        )
+        ctx.inv2d_data.append({
+            "rx_key": data_key,
+            "tx_key": tx_key,
+            "caption": (
+                f"Observed versus synthetic {c_hx}/{c_hz} channel gains "
+                f"({src_lab} source); every frequency on the same axes."
+            ),
+            "tx_caption": (
+                f"Observed versus synthetic {c_hx}/{c_hz} versus transmitter "
+                f"({src_lab} source); every frequency on the same axes."
+            ),
+        })
 
 
 def _rebuild_1d_section(data: Mapping, summary: Mapping, sg_true: Path) -> Optional[tuple]:
@@ -1305,25 +1335,26 @@ def render_tex(ctx: ReportContext) -> str:
         lines.append(_kv_table(collect_2d_inv_rows(ctx)))
         if not ctx.inv2d_sections:
             lines.append(_note_block("No ladder stages were available to plot."))
-        for sec in ctx.inv2d_sections:
-            lines.append(rf"\subsection{{{latex_escape(sec['title'])}}}")
-            lines.append(_kv_table(sec.get("rows") or []))
-            block = _include_fig(
-                ctx,
-                sec.get("models"),
-                "True resistivity versus the inverted model at this scale.",
-            )
-            lines.append(block or _note_block("2D inverted-model figure not available for this scale."))
-            block = _include_fig(
-                ctx,
-                sec.get("slices"),
-                "Resistivity slices through the true and inverted models at this scale.",
-            )
-            lines.append(block or "")
-            data_items = sec.get("data") or []
-            if not data_items:
-                lines.append(_note_block("No synthetic pair was found for this scale."))
-            for item in data_items:
+        else:
+            for sec in ctx.inv2d_sections:
+                lines.append(rf"\subsection{{{latex_escape(sec['title'])}}}")
+                lines.append(_kv_table(sec.get("rows") or []))
+                block = _include_fig(
+                    ctx,
+                    sec.get("models"),
+                    "True resistivity versus the inverted model at this scale.",
+                )
+                lines.append(block or _note_block("2D inverted-model figure not available for this scale."))
+                block = _include_fig(
+                    ctx,
+                    sec.get("slices"),
+                    "Resistivity slices through the true and inverted models at this scale.",
+                )
+                lines.append(block or "")
+            lines.append(r"\subsection{Data comparison}")
+            if not ctx.inv2d_data:
+                lines.append(_note_block("No synthetic pair was found for this ladder."))
+            for item in ctx.inv2d_data:
                 block = _include_fig(ctx, item.get("rx_key"), item.get("caption") or "")
                 lines.append(block or "")
                 block = _include_fig(ctx, item.get("tx_key"), item.get("tx_caption") or "")

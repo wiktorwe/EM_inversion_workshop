@@ -271,8 +271,10 @@ Other utilities:
   python scripts/make_workshop_report.py --list-datasets
   ```
 
-  Figure names are per scale and source (`inv2d_models_f2000Hz.pdf`,
-  `inv2d_data_f2000Hz_hx.pdf`, `fw_amp_phase_f2000Hz_hx.pdf`) so they coexist
+  Figure names: inverted models stay per scale (`inv2d_models_f2000Hz.pdf`);
+  observed-versus-synthetic data is one figure per source with every frequency
+  overplotted (`inv2d_data_hx.pdf`, `inv2d_data_vs_tx_hx.pdf`); modelled
+  amp/phase stays per frequency (`fw_amp_phase_f2000Hz_hx.pdf`). They coexist
   in one report directory.
 
   The script does not re-run modelling or inversion. `--compile` runs
