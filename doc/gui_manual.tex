@@ -374,21 +374,21 @@ An independent 1D layered inversion, run separately for each transmitter, agains
 
 \subsection{Purpose}
 
-Visualize and export 1D inversion results from Step 05: pseudo-2D section (mean and uncertainty), per-transmitter diagnostics, and modelled-vs-observed data comparison.
+Visualize and export 1D hybrid inversion results from Step 05. Layout mirrors Step 04: a global \textbf{Run:} selector (loads automatically on change) and a run-parameters panel, then two tabs — \textbf{Models} and \textbf{Data}.
 
 \subsection{Parameters (physical meaning and impact)}
 
 \begin{itemize}
 
-  \item \textbf{Run} — Which \texttt{RunN} under \texttt{workspace/1D/inversion/} to load. Loading restores frequencies, \texttt{n\_periods}, and other settings from that run's \texttt{REPORT.md}/\texttt{summary.json} and shows a \textbf{Run parameters} panel — you do not re-enter what Step 05 used.
+  \item \textbf{Run} — Which \texttt{RunN} under \texttt{workspace/1D/inversion/} to inspect. Changing the run reloads the NPZ/JSON and shows a \textbf{Run parameters} panel (frequencies, \texttt{n\_periods}, optimizer, bounds) — you do not re-enter what Step 05 used.
 
-  \item \textbf{x slice (m), z slice (m), bg rho (Ohm.m)} — Section display controls. Background resistivity defaults from the loaded run report when present.
+  \item \textbf{Models tab} — Pseudo-2D resistivity section (most-likely model; DE envelope width p90$-$p10 for hybrid runs, or legacy std), depth/lateral slices, per-Tx layered model with uncertainty selector (DE 10--90\% envelope, BlockInv $\pm 1\sigma$, or legacy CI), and SEG-Y export of the mean section.
 
-  \item \textbf{Tx, Uncertainty} — Per-transmitter diagnostics and uncertainty band (1 std or 90\% CI).
+  \item \textbf{x slice (m), z slice (m), bg rho (Ohm.m)} — Section display controls on the Models tab. Background resistivity defaults from the loaded run report when present.
 
-  \item \textbf{Freqs (Hz), n\_periods, component, plot, frequency, local rx, trace idx} — Data-comparison panel. Frequency list and \texttt{n\_periods} default from \texttt{setup\_metadata.json}, then from the loaded run report.
+  \item \textbf{Data tab} — Same \textbf{view} dropdown as Steps 02 and 04 (frequency $\times$ source $\times$ receiver). \textbf{plot}, \textbf{tx}, \textbf{local rx}, \textbf{trace idx} drive the real-vs-synthetic gather comparison. Load real data assembles the full tensor from the acquisition matrix; generate synthetics runs the analytic forward for every Tx.
 
-  \item \textbf{Buttons} — \textbf{Load run}, \textbf{Refresh run list}, \textbf{Rebuild section from saved layers}, \textbf{Refresh Tx plots}, \textbf{Load real data}, \textbf{Generate synthetics from inverted model}, \textbf{Export mean section to SEGY} (writes to \texttt{workspace/1D/results/RunN/}), \textbf{Quit GUI server}.
+  \item \textbf{Buttons} — \textbf{Refresh run list}, \textbf{Rebuild section from saved layers}, \textbf{Refresh Tx plots}, \textbf{Load real data}, \textbf{Generate synthetics from inverted model}, \textbf{Export mean section to SEGY} (writes to \texttt{workspace/1D/results/RunN/}), \textbf{Quit GUI server}.
 
 \end{itemize}
 

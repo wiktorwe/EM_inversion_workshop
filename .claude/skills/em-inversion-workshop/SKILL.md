@@ -661,6 +661,11 @@ previous one; every arrow is a place a change can break something.
 ### Step 06 - 1D results
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
   `headless`, `run_report`, `segy`, `setup_defaults`
+- **layout** mirrors Step 04: global **Run:** selector (auto-loads on change) +
+  run-parameters panel; **Models** tab (pseudo-2D section, slices, per-Tx model,
+  export) and **Data** tab (view selector, real vs analytic synthetic compare).
+  Separate `tx_diag_select` (Models) and `tx_data_select` (Data) — do not share
+  one Tx dropdown across tabs.
 - **reads** `Run{N}/` summaries (including `run_metadata.json`'s
   `data_convention`) + the forward data
 - **writes** `workspace/1D/results/` SEG-Y exports
@@ -671,6 +676,8 @@ previous one; every arrow is a place a change can break something.
     with `get_calibration_C` and the synthetics following the same source.
     Before that it was hardcoded to Kx and `gains['HZ']` was computed and
     discarded, so Czx/Czz could not be displayed at all.
+  - hybrid runs plot DE envelope width (p90−p10) on the pseudo-2D section when
+    `section_rho_p10/p90` are in the NPZ; legacy runs still show std.
   - it WARNS when a run's `data_convention` is older than
     `run_report.DATA_CONVENTION`. Bump that constant whenever a change makes
     new channel gains incomparable with old ones, and say why in its comment.
