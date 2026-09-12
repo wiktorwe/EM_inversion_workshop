@@ -82,6 +82,7 @@ def split_objective(
     freq_mask=None,
     snap_dz=None,
     snap_origin_m=None,
+    n_nodes=120,
 ) -> Tuple[float, float, float]:
     """`(data_misfit, reg_norm, total)` for the objective the run minimises.
 
@@ -92,7 +93,7 @@ def split_objective(
     return tensor_objective_parts(
         params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r, reg_lambda, cal,
         components=components, weights=weights, freq_mask=freq_mask, snap_dz=snap_dz,
-        snap_origin_m=snap_origin_m,
+        snap_origin_m=snap_origin_m, n_nodes=n_nodes,
     )
 
 
@@ -156,6 +157,8 @@ def run_de_once(cfg: Mapping[str, Any], tx_entry: Mapping[str, Any], seed: int) 
         cfg["log10_thk_max"],
     )
 
+    n_nodes = int(cfg.get("n_nodes", 120))
+
     def obj(p):
         _data, _reg, total = split_objective(
             p,
@@ -173,6 +176,7 @@ def run_de_once(cfg: Mapping[str, Any], tx_entry: Mapping[str, Any], seed: int) 
             # functional - the same mistake the Kx-only copy of this misfit made.
             snap_dz=cfg.get("snap_dz"),
             snap_origin_m=cfg.get("snap_origin_m"),
+            n_nodes=n_nodes,
         )
         return total
 
@@ -200,12 +204,98 @@ def run_de_once(cfg: Mapping[str, Any], tx_entry: Mapping[str, Any], seed: int) 
         weights=weights,
         snap_dz=cfg.get("snap_dz"),
         snap_origin_m=cfg.get("snap_origin_m"),
+        n_nodes=n_nodes,
     )
     n_data = n_tensor_data(tx_entry, components, weights=weights)
     return {
         "success": bool(getattr(out, "success", True)),
         "seed": int(seed),
         "params": best,
+        "total": float(total),
+        "data_misfit": float(data_misfit),
+        "reg_norm": float(reg_norm),
+        "chi2_data": float(data_misfit / max(n_data, 1)),
+        "popsize": int(cfg["popsize"]),
+        "maxiter": int(cfg["maxiter"]),
+        "reg_lambda": float(cfg["reg_lambda"]),
+        "nit": int(getattr(out, "nit", -1)),
+        "nfev": int(getattr(out, "nfev", -1)),
+    }
+
+
+def run_de_population(cfg: Mapping[str, Any], tx_entry: Mapping[str, Any], seed: int) -> Dict[str, Any]:
+    """One DE run; return best fit plus the final population (ambiguity cloud)."""
+    components, cal, weights = _components_and_cal(cfg, tx_entry)
+    n_layers = int(cfg["n_layers"])
+    bounds = build_bounds(
+        n_layers,
+        cfg["log10_rho_min"],
+        cfg["log10_rho_max"],
+        cfg["log10_thk_min"],
+        cfg["log10_thk_max"],
+    )
+    n_nodes = int(cfg.get("n_nodes", 120))
+
+    def obj(p):
+        _data, _reg, total = split_objective(
+            p,
+            tx_entry=tx_entry,
+            n_layers=n_layers,
+            z_start_rel=cfg["z_start_rel"],
+            z_end_rel=cfg["z_end_rel"],
+            eps_r=cfg["eps_r"],
+            reg_lambda=cfg["reg_lambda"],
+            cal=cal,
+            components=components,
+            weights=weights,
+            snap_dz=cfg.get("snap_dz"),
+            snap_origin_m=cfg.get("snap_origin_m"),
+            n_nodes=n_nodes,
+        )
+        return total
+
+    out = differential_evolution(
+        obj,
+        bounds=bounds,
+        maxiter=int(cfg["maxiter"]),
+        popsize=int(cfg["popsize"]),
+        seed=int(seed),
+        polish=False,
+        workers=1,
+        updating="deferred",
+    )
+    best = np.asarray(out.x, dtype=float)
+    pop = np.asarray(getattr(out, "population", np.empty((0, best.size))), dtype=float)
+    if pop.ndim == 1:
+        pop = pop.reshape(1, -1)
+    # Best plus every member of the final generation.
+    candidates = np.vstack([best.reshape(1, -1), pop]) if pop.size else best.reshape(1, -1)
+    # Drop near-duplicates in log-parameter space.
+    rounded = np.round(candidates, 4)
+    _, keep = np.unique(rounded, axis=0, return_index=True)
+    candidates = candidates[np.sort(keep)]
+
+    data_misfit, reg_norm, total = split_objective(
+        best,
+        tx_entry=tx_entry,
+        n_layers=n_layers,
+        z_start_rel=cfg["z_start_rel"],
+        z_end_rel=cfg["z_end_rel"],
+        eps_r=cfg["eps_r"],
+        reg_lambda=cfg["reg_lambda"],
+        cal=cal,
+        components=components,
+        weights=weights,
+        snap_dz=cfg.get("snap_dz"),
+        snap_origin_m=cfg.get("snap_origin_m"),
+        n_nodes=n_nodes,
+    )
+    n_data = n_tensor_data(tx_entry, components, weights=weights)
+    return {
+        "success": bool(getattr(out, "success", True)),
+        "seed": int(seed),
+        "params": best,
+        "population": candidates,
         "total": float(total),
         "data_misfit": float(data_misfit),
         "reg_norm": float(reg_norm),

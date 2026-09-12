@@ -102,6 +102,232 @@ def blocky_layers_from_trace(rho_cells, z0, dz, rtol=1e-5, atol=0.0):
     return depth, res
 
 
+def lateral_mean_layers_from_segy(segy_path):
+    """Blocky `(depth_abs, res)` from the lateral mean resistivity column of a SEG-Y."""
+    from scripts.modules.segy import read_resistivity_from_segy
+
+    seg = read_resistivity_from_segy(str(segy_path))
+    z = np.asarray(seg["z"], dtype=float)
+    rho_mean = np.mean(np.asarray(seg["resistivity"], dtype=float), axis=1)
+    dz = float(z[1] - z[0]) if z.size > 1 else 1.0
+    return blocky_layers_from_trace(rho_mean, z0=float(z[0]), dz=dz)
+
+
+def layer_depth_edges(rho, thk, z_start_rel, z_end_rel):
+    """Interface depths for n layers: n+1 edges from z_start to z_end."""
+    rho = np.asarray(rho, dtype=float)
+    thk = np.asarray(thk, dtype=float)
+    n = int(rho.size)
+    z_edges = np.empty(n + 1, dtype=float)
+    z_edges[0] = float(z_start_rel)
+    for i in range(max(n - 1, 0)):
+        z_edges[i + 1] = z_edges[i] + float(thk[i])
+    z_edges[n] = float(z_end_rel)
+    return z_edges
+
+
+def _resample_layer_stack_to_n_layers(rho, thk, z_start_rel, z_end_rel, n_layers):
+    """Merge a fine blocky stack onto exactly ``n_layers`` equal-thickness bins."""
+    rho = np.asarray(rho, dtype=float).reshape(-1)
+    thk = np.asarray(thk, dtype=float).reshape(-1)
+    n_layers = int(n_layers)
+    if n_layers < 1:
+        raise ValueError("n_layers must be >= 1")
+    z_edges = layer_depth_edges(rho, thk, z_start_rel, z_end_rel)
+    z_fine = np.linspace(z_start_rel, z_end_rel, 800)
+    idx = np.searchsorted(z_edges[1:-1], z_fine, side="right")
+    idx = np.clip(idx, 0, rho.size - 1)
+    rho_fine = rho[idx]
+    bin_edges = np.linspace(z_start_rel, z_end_rel, n_layers + 1)
+    new_rho, new_thk = [], []
+    for i in range(n_layers):
+        lo, hi = bin_edges[i], bin_edges[i + 1]
+        mask = (z_fine >= lo) & (z_fine < hi if i < n_layers - 1 else z_fine <= hi)
+        new_rho.append(float(np.mean(rho_fine[mask])))
+        if i < n_layers - 1:
+            new_thk.append(float(hi - lo))
+    return np.asarray(new_rho, dtype=float), np.asarray(new_thk, dtype=float)
+
+
+def true_params_from_sg_rss(
+    sg_path,
+    tx_x,
+    tx_z,
+    z_start_rel,
+    z_end_rel,
+    *,
+    n_layers=None,
+):
+    """True Earth parameter vector from the FD ``sg.rss`` column at ``tx_x``.
+
+    Use this when FDTD observations were modelled on the resampled FD grid — not
+    the SEG-Y 4-layer resample, which can sit ~10 m away in interface depth.
+    """
+    d_rel, res = true_model_layers_from_sg(sg_path, tx_x, tx_z)
+    d_rel = np.asarray(d_rel, dtype=float)
+    res = np.asarray(res, dtype=float)
+    keep = (d_rel > float(z_start_rel)) & (d_rel < float(z_end_rel))
+    idx = np.flatnonzero(keep)
+    if idx.size == 0:
+        raise ValueError("no true interface falls inside the depth window")
+    rho = np.concatenate([res[idx], [float(res[idx[-1] + 1])]])
+    d_in = np.concatenate([d_rel[idx], [float(z_end_rel)]])
+    thk = np.diff(np.concatenate([[float(z_start_rel)], d_in]))
+    if thk.size >= rho.size:
+        thk = thk[: max(int(rho.size) - 1, 0)]
+    if np.any(thk <= 0.0):
+        raise ValueError(f"degenerate true stack: thicknesses {thk}")
+    if n_layers is not None and int(n_layers) != rho.size:
+        rho, thk = _resample_layer_stack_to_n_layers(
+            rho, thk, float(z_start_rel), float(z_end_rel), int(n_layers)
+        )
+    return params_from_rho_thickness(rho, thk, rho.size, z_start_rel, z_end_rel), rho.size
+
+
+def true_params_from_segy(
+    segy_path,
+    tx_z,
+    z_start_rel,
+    z_end_rel,
+    *,
+    tx_x=None,
+    column_index=None,
+    lateral_mean=False,
+    n_layers=None,
+):
+    """True Earth as an inversion parameter vector, from ``examples/Fault_1.sgy``.
+
+    With ``column_index`` set, reads that SEG-Y trace (0 = first vertical profile).
+    With ``lateral_mean=True`` the resistivity is averaged over all x traces first.
+    Otherwise reads the column nearest ``tx_x``.
+    """
+    from scripts.modules.segy import read_resistivity_from_segy
+
+    seg = read_resistivity_from_segy(str(segy_path))
+    z = np.asarray(seg["z"], dtype=float)
+    grid = np.asarray(seg["resistivity"], dtype=float)
+    dz = float(z[1] - z[0]) if z.size > 1 else 1.0
+    if column_index is not None:
+        ix = int(column_index)
+        if ix < 0 or ix >= grid.shape[1]:
+            raise ValueError(f"column_index {ix} out of range for {grid.shape[1]} traces")
+        rho_col = grid[:, ix]
+    elif lateral_mean:
+        rho_col = np.mean(grid, axis=1)
+    else:
+        if tx_x is None:
+            raise ValueError("tx_x is required when lateral_mean=False and column_index is None")
+        ix = int(np.argmin(np.abs(np.asarray(seg["x"], float) - float(tx_x))))
+        rho_col = grid[:, ix]
+    d_abs, res = blocky_layers_from_trace(rho_col, z0=float(z[0]), dz=dz)
+    d_rel = np.asarray(d_abs, dtype=float) - float(tx_z)
+    keep = (d_rel > float(z_start_rel)) & (d_rel < float(z_end_rel))
+    idx = np.flatnonzero(keep)
+    if idx.size == 0:
+        raise ValueError("no true interface falls inside the depth window")
+    rho = np.concatenate([np.asarray(res, float)[idx], [float(res[idx[-1] + 1])]])
+    d_in = np.concatenate([d_rel[idx], [float(z_end_rel)]])
+    thk = np.diff(np.concatenate([[float(z_start_rel)], d_in]))
+    if thk.size >= rho.size:
+        # Inversion uses n-1 finite thicknesses; the deepest rho is the halfspace.
+        thk = thk[: max(int(rho.size) - 1, 0)]
+    if np.any(thk <= 0.0):
+        raise ValueError(f"degenerate true stack: thicknesses {thk}")
+    if n_layers is not None and int(n_layers) != rho.size:
+        rho, thk = _resample_layer_stack_to_n_layers(
+            rho, thk, float(z_start_rel), float(z_end_rel), int(n_layers)
+        )
+    return params_from_rho_thickness(rho, thk, rho.size, z_start_rel, z_end_rel), rho.size
+
+
+def workshop_tx_entry(tx_id=0, freqs_hz=(2000.0, 4000.0, 6000.0), setup=None):
+    """One transmitter from Step 01 defaults (``headless.SetupParams``)."""
+    from scripts.modules.headless import SetupParams
+
+    p = setup or SetupParams()
+    tx_id = int(tx_id)
+    tx_x = float(p.tx0_m) + tx_id * float(p.dtx_m)
+    off_x = np.asarray([float(p.rx0_m) + i * float(p.drx_m) for i in range(int(p.nrx))], dtype=float)
+    off_z = np.zeros(int(p.nrx), dtype=float)
+    return {
+        "tx_id": tx_id,
+        "tx_x": tx_x,
+        "tx_z": float(p.tz0_m),
+        "off_x": off_x,
+        "off_z": off_z,
+        "freqs": np.asarray(freqs_hz, dtype=float),
+        "obs": {},
+    }
+
+
+def workshop_per_frequency_design(freqs_hz, max_depth_offset_m=60.0, setup=None):
+    """``dx``, ``eps_r_used`` and ``fd_order`` per tone from Step 01 FD design."""
+    from dataclasses import replace
+
+    from scripts.modules.headless import SetupParams, fd_design_for
+
+    p = setup or SetupParams()
+    rows = {}
+    for f in np.asarray(freqs_hz, dtype=float).reshape(-1):
+        sub = replace(p, flist_hz=(float(f),), f_min_hz=float(f), f_max_hz=float(f))
+        design, _, _ = fd_design_for(sub, max_depth_offset_m=float(max_depth_offset_m))
+        rows[float(f)] = design
+    return rows
+
+
+def simulate_tensor_tx_with_calibration(
+    params,
+    tx_entry,
+    *,
+    n_layers,
+    z_start_rel,
+    z_end_rel,
+    eps_r,
+    cal,
+    components=("Cxx", "Cxz", "Czx", "Czz"),
+    noise_rel=0.0,
+    seed=42,
+    n_nodes=120,
+):
+    """Forward-model obs from ``params`` and attach ``cal`` (analytic or synthetic)."""
+    comps = tuple(components)
+    tx_entry = dict(tx_entry)
+    tx_entry["obs"] = dict(tx_entry.get("obs") or {})
+
+    pred = forward_tensor_for_tx(
+        params,
+        tx_entry,
+        n_layers,
+        z_start_rel,
+        z_end_rel,
+        eps_r,
+        components=comps,
+        n_nodes=n_nodes,
+    )
+    for c in comps:
+        tx_entry["obs"][c] = np.asarray(pred[c], dtype=complex).copy()
+
+    if float(noise_rel) > 0.0:
+        if cal.get("method") == "synthetic_noise_matched":
+            cal = noise_matched_tensor_calibration(tx_entry, comps, noise_rel)
+        else:
+            cal = dict(cal)
+        rng = np.random.default_rng(int(seed))
+        for c in comps:
+            sig = np.asarray(cal["sigma"][c], dtype=float)
+            if sig.ndim == 1:
+                sig = sig[:, None]
+            noise = (
+                rng.standard_normal(tx_entry["obs"][c].shape)
+                + 1j * rng.standard_normal(tx_entry["obs"][c].shape)
+            ) * sig / np.sqrt(2.0)
+            tx_entry["obs"][c] = tx_entry["obs"][c] + noise
+        if cal.get("method") == "synthetic_noise_matched":
+            cal = noise_matched_tensor_calibration(tx_entry, comps, noise_rel)
+
+    return tx_entry, cal
+
+
 def true_model_layers_from_sg(sg_path, tx_x, tx_z, z_positive_up=False):
     """`(depth_rel, res)` for the TRUE model beneath a transmitter, from sg.rss.
 
@@ -358,7 +584,8 @@ def amplitude_scale(tx_entry, components):
 
 def tensor_objective_parts(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
                            reg_lambda, cal, components=DEFAULT_COMPONENTS, weights=None,
-                           freq_mask=None, snap_dz=None, snap_origin_m=None):
+                           freq_mask=None, snap_dz=None, snap_origin_m=None,
+                           n_nodes=120):
     """`(data_misfit, reg_norm, total)` for the requested tensor components.
 
     THE one implementation. `tensor_objective` returns only `total` from it, and
@@ -382,7 +609,8 @@ def tensor_objective_parts(params, tx_entry, n_layers, z_start_rel, z_end_rel, e
     try:
         pred = forward_tensor_for_tx(params, tx_entry, n_layers, z_start_rel, z_end_rel,
                                      eps_r, components=components, freq_mask=freq_mask,
-                                     snap_dz=snap_dz, snap_origin_m=snap_origin_m)
+                                     snap_dz=snap_dz, snap_origin_m=snap_origin_m,
+                                     n_nodes=n_nodes)
     except ForwardRejected:
         return _REJECT_COST, 0.0, _REJECT_COST
 
@@ -455,12 +683,12 @@ def tensor_objective_parts(params, tx_entry, n_layers, z_start_rel, z_end_rel, e
 
 def tensor_objective(params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r,
                      reg_lambda, cal, components=DEFAULT_COMPONENTS, weights=None,
-                     freq_mask=None, snap_dz=None, snap_origin_m=None):
+                     freq_mask=None, snap_dz=None, snap_origin_m=None, n_nodes=120):
     """Scalar misfit for the optimisers - `tensor_objective_parts`'s total."""
     return tensor_objective_parts(
         params, tx_entry, n_layers, z_start_rel, z_end_rel, eps_r, reg_lambda, cal,
         components=components, weights=weights, freq_mask=freq_mask, snap_dz=snap_dz,
-        snap_origin_m=snap_origin_m,
+        snap_origin_m=snap_origin_m, n_nodes=n_nodes,
     )[2]
 
 
@@ -892,6 +1120,114 @@ def build_bounds(n_layers, log10_rho_min, log10_rho_max, log10_thk_min, log10_th
     return b
 
 
+def params_from_rho_thickness(rho, thickness, n_layers, z_start_rel, z_end_rel):
+    """Log-space parameter vector from physical rho and thickness arrays."""
+    span = float(z_end_rel - z_start_rel)
+    thk_raw = np.asarray(thickness, dtype=float).reshape(-1)
+    thk = thk_raw / max(float(np.sum(thk_raw)), 1e-12) * span
+    lrho = np.log10(np.clip(np.asarray(rho, dtype=float), 1e-12, np.inf))
+    lthk = np.log10(np.clip(thk, 1e-12, np.inf))
+    if lrho.size != int(n_layers):
+        raise ValueError("rho length must equal n_layers")
+    if lthk.size != max(int(n_layers) - 1, 0):
+        raise ValueError("thickness length must equal n_layers - 1")
+    return np.concatenate([lrho, lthk]).astype(float)
+
+
+def noise_matched_tensor_calibration(tx_entry, components, noise_rel):
+    """C=1 calibration with sigma = noise_rel times each source's field scale."""
+    comps = tuple(components)
+    freqs = np.asarray(tx_entry["freqs"], dtype=float).reshape(-1)
+    nfreq = freqs.size
+    rel = float(noise_rel)
+    C = {s_: np.ones(nfreq, dtype=complex)
+         for s_ in sorted({TENSOR_COMPONENTS[c][0] for c in comps})}
+    amp_scale = amplitude_scale(tx_entry, comps)
+    sigma, sigma_rel = {}, {}
+    for c in comps:
+        obs = tx_entry.get("obs", {}).get(c)
+        if obs is None:
+            continue
+        amp = amp_scale.get(TENSOR_COMPONENTS[c][0], np.abs(np.asarray(obs, dtype=complex)))
+        sigma_rel[c] = np.full_like(amp, rel, dtype=float)
+        sigma[c] = rel * amp
+    return {
+        "C": C,
+        "sigma": sigma,
+        "sigma_rel": sigma_rel,
+        "freqs_hz": freqs,
+        "method": "synthetic_noise_matched",
+        "notes": f"C=1; sigma = {rel:.4g} * source field scale",
+    }
+
+
+def simulate_tensor_tx(
+    params,
+    *,
+    n_layers,
+    z_start_rel,
+    z_end_rel,
+    eps_r,
+    freqs_hz,
+    off_x,
+    off_z,
+    tx_z=6050.0,
+    tx_x=0.0,
+    components=("Cxx", "Cxz", "Czx", "Czz"),
+    noise_rel=0.03,
+    seed=42,
+    n_nodes=120,
+):
+    """Synthetic tx_entry and noise-matched calibration for optimizer experiments.
+
+    Forward-models the requested tensor components, adds complex Gaussian noise
+    at ``noise_rel`` of each source's field scale, and returns a calibration whose
+    sigma matches that noise level (inverse-crime: true-model chi2 ~ 1).
+    """
+    comps = tuple(components)
+    freqs = np.asarray(freqs_hz, dtype=float).reshape(-1)
+    off_x = np.asarray(off_x, dtype=float).reshape(-1)
+    off_z = np.asarray(off_z, dtype=float).reshape(-1)
+    if off_z.size == 1:
+        off_z = np.full(off_x.shape, float(off_z[0]))
+
+    tx_entry = {
+        "tx_x": float(tx_x),
+        "tx_z": float(tx_z),
+        "off_x": off_x,
+        "off_z": off_z,
+        "freqs": freqs,
+        "obs": {},
+    }
+
+    pred = forward_tensor_for_tx(
+        params,
+        tx_entry,
+        n_layers,
+        z_start_rel,
+        z_end_rel,
+        eps_r,
+        components=comps,
+        n_nodes=n_nodes,
+    )
+    for c in comps:
+        tx_entry["obs"][c] = np.asarray(pred[c], dtype=complex).copy()
+
+    cal = noise_matched_tensor_calibration(tx_entry, comps, noise_rel)
+
+    rng = np.random.default_rng(int(seed))
+    for c in comps:
+        sig = cal["sigma"][c]
+        noise = (
+            rng.standard_normal(tx_entry["obs"][c].shape)
+            + 1j * rng.standard_normal(tx_entry["obs"][c].shape)
+        ) * sig / np.sqrt(2.0)
+        tx_entry["obs"][c] = tx_entry["obs"][c] + noise
+
+    cal = noise_matched_tensor_calibration(tx_entry, comps, noise_rel)
+    return tx_entry, cal
+
+
 __all__ = [
     "DEFAULT_COMPONENTS",
     "TENSOR_COMPONENTS",
@@ -908,4 +1244,13 @@ __all__ = [
     "blocky_layers_from_trace",
     "true_model_layers_from_sg",
     "unpack_model_params",
+    "params_from_rho_thickness",
+    "noise_matched_tensor_calibration",
+    "simulate_tensor_tx",
+    "lateral_mean_layers_from_segy",
+    "layer_depth_edges",
+    "true_params_from_segy",
+    "workshop_tx_entry",
+    "workshop_per_frequency_design",
+    "simulate_tensor_tx_with_calibration",
 ]

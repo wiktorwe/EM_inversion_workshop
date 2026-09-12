@@ -575,6 +575,34 @@ def _stage_forward(stage: Mapping, fwd_root: Path) -> tuple[Optional[Path], dict
     return None, {}
 
 
+def _optimizer_label(summary: Mapping[str, Any], cfg: Mapping[str, Any]) -> str:
+    opt = str(summary.get("optimizer") or cfg.get("optimizer") or "")
+    if opt == "de_blockinv_hybrid":
+        return "DE population + BlockInv hybrid"
+    return opt or None
+
+
+def _optimizer_knobs_summary(summary: Mapping[str, Any], cfg: Mapping[str, Any]) -> str:
+    opt = str(summary.get("optimizer") or cfg.get("optimizer") or "")
+    if opt == "de_blockinv_hybrid":
+        return (
+            f"maxiter={summary.get('maxiter') or cfg.get('maxiter')} / "
+            f"popsize={summary.get('popsize') or cfg.get('popsize')} / "
+            f"block_max_iter={summary.get('block_max_iter') or cfg.get('block_max_iter')}"
+        )
+    return f"{summary.get('maxiter')} / {summary.get('popsize')} / {summary.get('maxfun')}"
+
+
+def _hybrid_ambiguity_summary(summary: Mapping[str, Any], run_meta: Mapping[str, Any]) -> Any:
+    opt = str(summary.get("optimizer") or "")
+    if opt == "de_blockinv_hybrid":
+        n_env = summary.get("n_envelope")
+        if isinstance(n_env, list) and n_env:
+            return f"DE population envelope (n≈{int(round(sum(n_env)/len(n_env)))})"
+        return "DE population envelope + hybrid polish"
+    return summary.get("n_runs_per_tx") or run_meta.get("n_runs_per_tx")
+
+
 def _stage_inv_rows(stage_dir: Path) -> list[tuple[str, Any]]:
     inv_cfg: dict[str, str] = {}
     cfg_path = stage_dir / "inv.cfg"
@@ -640,7 +668,8 @@ def collect_1d_inv_rows(summary: Mapping, run_meta: Mapping) -> list[tuple[str, 
         ("Timestamp", summary.get("timestamp")),
         ("Transmitters", summary.get("n_tx")),
         ("Tx ids", summary.get("tx_ids")),
-        ("Runs per Tx", summary.get("n_runs_per_tx") or run_meta.get("n_runs_per_tx")),
+        ("Ambiguity / runs",
+         _hybrid_ambiguity_summary(summary, run_meta)),
         ("Seeds", summary.get("seeds") or run_meta.get("seeds")),
         ("Frequencies (Hz)", summary.get("freqs_hz") or cfg.get("freqs_hz")),
         ("f_min (Hz)", summary.get("f_min_hz")),
@@ -659,8 +688,8 @@ def collect_1d_inv_rows(summary: Mapping, run_meta: Mapping) -> list[tuple[str, 
         ("rho_max (Ohm-m)", summary.get("rho_max")),
         ("thk_min (m)", summary.get("thk_min") or cfg.get("thk_min")),
         ("thk_max (m)", summary.get("thk_max") or cfg.get("thk_max")),
-        ("Optimizer", summary.get("optimizer") or cfg.get("optimizer")),
-        ("maxiter / popsize / maxfun", f"{summary.get('maxiter')} / {summary.get('popsize')} / {summary.get('maxfun')}"),
+        ("Optimizer", _optimizer_label(summary, cfg)),
+        ("DE / polish knobs", _optimizer_knobs_summary(summary, cfg)),
         ("block_max_iter", summary.get("block_max_iter") or cfg.get("block_max_iter")),
         ("Component weights",
          " / ".join(f"{c}={(summary.get('component_weights') or {}).get(c, cfg.get(f'w_{c}', 1.0))}"
@@ -1125,6 +1154,8 @@ def write_1d_figures(ctx: ReportContext, data: Mapping, summary: Mapping) -> Non
     sec_x = data.get("section_x")
     sec_z = data.get("section_z")
     sec_rho = data.get("section_rho")
+    sec_p10 = data.get("section_rho_p10")
+    sec_p90 = data.get("section_rho_p90")
     sec_std = data.get("section_rho_std")
     if sec_x is None or sec_z is None or sec_rho is None:
         rebuilt = _rebuild_1d_section(data, summary, sg_true)
@@ -1141,6 +1172,8 @@ def write_1d_figures(ctx: ReportContext, data: Mapping, summary: Mapping) -> Non
             np.asarray(sec_rho, dtype=float),
             ctx.figures_dir / "inv1d_section.pdf",
             sec_std=None if sec_std is None else np.asarray(sec_std, dtype=float),
+            sec_p10=None if sec_p10 is None else np.asarray(sec_p10, dtype=float),
+            sec_p90=None if sec_p90 is None else np.asarray(sec_p90, dtype=float),
             true_x=true_x,
             true_z=true_z,
             true_rho=true_rho,
@@ -1154,6 +1187,16 @@ def write_1d_figures(ctx: ReportContext, data: Mapping, summary: Mapping) -> Non
 
     tx_ids = np.asarray(data.get("tx_ids", []), dtype=int)
     if tx_ids.size and "rho_layers" in data:
+        mid = int(tx_ids[tx_ids.size // 2])
+        env_kw = {}
+        z_key = f"envelope_z_tx{mid}"
+        if z_key in data:
+            env_kw = dict(
+                envelope_z_rel=np.asarray(data[z_key], dtype=float),
+                envelope_rho_p10=np.asarray(data[f"envelope_rho_p10_tx{mid}"], dtype=float),
+                envelope_rho_p90=np.asarray(data[f"envelope_rho_p90_tx{mid}"], dtype=float),
+                envelope_tx_index=int(np.where(tx_ids == mid)[0][0]),
+            )
         _try_figure(
             ctx,
             "inv1d_rho_depth",
@@ -1166,6 +1209,7 @@ def write_1d_figures(ctx: ReportContext, data: Mapping, summary: Mapping) -> Non
             z_start=summary.get("z_start"),
             z_end=summary.get("z_end"),
             tx_z=np.asarray(data.get("tx_z", []), dtype=float) if "tx_z" in data else None,
+            **env_kw,
         )
     if tx_ids.size:
         mid = tx_ids[tx_ids.size // 2]

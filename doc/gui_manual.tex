@@ -358,9 +358,9 @@ An independent 1D layered inversion, run separately for each transmitter, agains
 
   \item \textbf{n\_layers, z\_start, z\_end, rho\_bg, rho\_min, rho\_max, thk\_min, thk\_max} — 1D model parameterization and search bounds. \texttt{rho\_bg}/\texttt{rho\_min}/\texttt{rho\_max} are seeded from Step 01's \texttt{rho\_min\_ohm\_m}/\texttt{rho\_max\_ohm\_m} when present.
 
-  \item \textbf{optimizer} — Differential Evolution, Dual Annealing, or BlockInv (Gauss--Newton).
+  \item \textbf{Hybrid method} — Fixed pipeline: one Differential Evolution run per Tx (final population $\rightarrow$ 10--90\% depth envelope), then BlockInv polish on the DE best for the point model and local Jacobian $\sigma$.
 
-  \item \textbf{maxiter, popsize, maxfun, seed, N runs/Tx, n\_jobs, blk\_iter} — Optimizer and ensemble settings.
+  \item \textbf{maxiter, popsize, seed, n\_jobs, blk\_iter} — DE budget, BlockInv polish cap, and parallel Tx count.
 
   \item \textbf{w\_hxh, w\_hxhz, Tikhonov lambda} — Misfit weights and smoothness penalty.
 
@@ -411,7 +411,7 @@ Visualize and export 1D inversion results from Step 05: pseudo-2D section (mean 
   \item \textbf{Missing explicit-engine MPI inversion binary} — Step 03 needs \texttt{mpiEminvTE2d} (or \texttt{mpiEminvTE2dGpu} if GPU inversion is enabled).
   \item \textbf{GPU validation fails} — Ensure \texttt{nvidia-smi} works, CUDA is installed, and GPU binaries exist under \texttt{\$ROCKEM\_SUITE\_ROOT/bin/}. Build targets in rockem-suite as shown in Environment setup. If you enabled GPU forward after Step 01, re-run \textbf{Finalize setup} in Step 01.
   \item \textbf{Wrong/stale rockem-suite checkout} — Step 00 validation checks for \texttt{magnetic\_line\_source\_fields\_layered} in the analytic solver shared directory.
-  \item \textbf{Missing \texttt{joblib}} — Step 05 needs \texttt{joblib} for parallel ensemble runs.
+  \item \textbf{Missing \texttt{joblib}} — Step 05 needs \texttt{joblib} for parallel Tx inversions.
   \item \textbf{Stale artifacts} — Run \texttt{./clean.sh} to remove \texttt{workspace/} and start fresh. This also wipes remembered frequencies/calibration and all 1D \texttt{REPORT.md} files; re-run Steps 01--02 afterwards.
 \end{itemize}
 

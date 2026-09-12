@@ -97,10 +97,22 @@ def build_1d_run_summary(
     hx_path: Optional[str] = None,
     hz_path: Optional[str] = None,
     timestamp: Optional[str] = None,
+    n_envelope: Optional[Sequence[int]] = None,
+    hybrid_polish_reverted: Optional[Sequence[bool]] = None,
 ) -> dict:
-    """Full machine-readable summary for Run{N}."""
+    """Full machine-readable summary for Run{N}.
+
+    Hybrid NPZ keys (Step 05 export, per Tx ``k`` when present):
+    ``envelope_z_tx{k}``, ``envelope_rho_p10_tx{k}``, ``envelope_rho_p50_tx{k}``,
+    ``envelope_rho_p90_tx{k}`` (log10 rho on depth grid rel. to Tx),
+    ``n_envelope_tx{k}``, ``hybrid_polish_reverted_tx{k}``.
+    Section arrays: ``section_rho`` (hybrid point model), ``section_rho_p10``,
+    ``section_rho_p90``. ``rho_layers_std`` is BlockInv local Jacobian σ, not
+    ensemble spread.
+    """
     cal_block = calibration_summary_block(calibration)
-    return {
+    opt = str(cfg.get("optimizer", ""))
+    summary = {
         "run_dir": str(run_dir),
         "timestamp": timestamp or datetime.datetime.now().isoformat(),
         "n_tx": int(len(tx_ids)),
@@ -123,11 +135,16 @@ def build_1d_run_summary(
         "rho_max": float(10.0 ** float(cfg["log10_rho_max"])) if "log10_rho_max" in cfg else None,
         "thk_min": float(cfg.get("thk_min")) if cfg.get("thk_min") is not None else None,
         "thk_max": float(cfg.get("thk_max")) if cfg.get("thk_max") is not None else None,
-        "optimizer": str(cfg.get("optimizer", "")),
+        "optimizer": opt,
         "maxiter": int(cfg["maxiter"]) if cfg.get("maxiter") is not None else None,
         "popsize": int(cfg["popsize"]) if cfg.get("popsize") is not None else None,
         "maxfun": int(cfg["maxfun"]) if cfg.get("maxfun") is not None else None,
         "block_max_iter": int(cfg["block_max_iter"]) if cfg.get("block_max_iter") is not None else None,
+        "envelope_percentiles": [10, 50, 90] if opt == "de_blockinv_hybrid" else None,
+        "n_envelope": [int(v) for v in n_envelope] if n_envelope is not None else None,
+        "hybrid_polish_reverted": [bool(v) for v in hybrid_polish_reverted]
+        if hybrid_polish_reverted is not None
+        else None,
         "component_weights": {c: float(cfg.get(f"w_{c}", 1.0))
                               for c in ("Cxx", "Cxz", "Czx", "Czz")},
         "reg_lambda": float(cfg.get("reg_lambda", 0.0)),
@@ -138,6 +155,38 @@ def build_1d_run_summary(
         "calibration": cal_block,
         "setup_metadata_path": str(setup_meta_path),
     }
+    return summary
+
+
+def _optimizer_knobs_line(summary: Mapping[str, Any]) -> str:
+    opt = str(summary.get("optimizer", ""))
+    if opt == "de_blockinv_hybrid":
+        return (
+            f"- **DE budget / BlockInv polish:** maxiter={summary.get('maxiter')}, "
+            f"popsize={summary.get('popsize')}, block_max_iter={summary.get('block_max_iter')}"
+        )
+    return (
+        f"- **maxiter / popsize / maxfun:** {summary.get('maxiter')} / "
+        f"{summary.get('popsize')} / {summary.get('maxfun')}"
+    )
+
+
+def _ambiguity_line(summary: Mapping[str, Any]) -> str:
+    opt = str(summary.get("optimizer", ""))
+    if opt == "de_blockinv_hybrid":
+        n_env = summary.get("n_envelope")
+        if isinstance(n_env, list) and n_env:
+            env_txt = f"min={min(n_env)}, max={max(n_env)}, mean={sum(n_env)/len(n_env):.0f}"
+        else:
+            env_txt = "see NPZ per-Tx keys"
+        return (
+            f"- **Ambiguity:** DE population envelope (10–90%) + hybrid polish; "
+            f"n_envelope per Tx: {env_txt}; seed={summary.get('seed_base')}"
+        )
+    return (
+        f"- **Ensemble:** {summary.get('n_runs_per_tx', 1)} run(s)/Tx, "
+        f"seed_base={summary.get('seed_base')}, seeds={summary.get('seeds', [])}"
+    )
 
 
 def render_1d_run_report_md(summary: Mapping[str, Any]) -> str:
@@ -150,7 +199,7 @@ def render_1d_run_report_md(summary: Mapping[str, Any]) -> str:
         f"- **Run directory:** `{summary.get('run_dir', '')}`",
         f"- **Timestamp:** {summary.get('timestamp', '')}",
         f"- **Transmitters:** {summary.get('n_tx', 0)} — ids {summary.get('tx_ids', [])}",
-        f"- **Ensemble:** {summary.get('n_runs_per_tx', 1)} run(s)/Tx, seed_base={summary.get('seed_base')}, seeds={summary.get('seeds', [])}",
+        _ambiguity_line(summary),
         "",
         "## Data extraction",
         "",
@@ -173,7 +222,7 @@ def render_1d_run_report_md(summary: Mapping[str, Any]) -> str:
         "## Optimizer / misfit",
         "",
         f"- **Optimizer:** {summary.get('optimizer')}",
-        f"- **maxiter / popsize / maxfun:** {summary.get('maxiter')} / {summary.get('popsize')} / {summary.get('maxfun')}",
+        _optimizer_knobs_line(summary),
         f"- **block_max_iter:** {summary.get('block_max_iter')}",
         "- **Component weights:** " + ", ".join(
             f"{c}={v}" for c, v in (summary.get("component_weights") or {}).items()),

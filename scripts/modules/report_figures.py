@@ -624,6 +624,8 @@ def save_1d_section_figure(
     path: Path,
     *,
     sec_std=None,
+    sec_p10=None,
+    sec_p90=None,
     true_x=None,
     true_z=None,
     true_rho=None,
@@ -632,8 +634,13 @@ def save_1d_section_figure(
     rx_x=None,
     rx_z=None,
 ) -> Path:
-    panels = [("1D mean", sec_x, sec_z, sec_rho, "viridis", "Ohm-m")]
-    if sec_std is not None:
+    panels = [("1D hybrid", sec_x, sec_z, sec_rho, "viridis", "Ohm-m")]
+    if sec_p10 is not None and sec_p90 is not None:
+        spread = np.asarray(sec_p90, dtype=float) - np.asarray(sec_p10, dtype=float)
+        finite = spread[np.isfinite(spread)]
+        if finite.size and float(np.nanmax(np.abs(finite))) > 1e-12:
+            panels.append(("Envelope p90−p10", sec_x, sec_z, spread, "hot", "Δρ (Ohm-m)"))
+    elif sec_std is not None:
         std = np.asarray(sec_std, dtype=float)
         finite = std[np.isfinite(std)]
         if finite.size and float(np.nanmax(np.abs(finite))) > 1e-12:
@@ -698,6 +705,10 @@ def save_1d_rho_vs_depth_figure(
     z_end: Optional[float] = None,
     tx_z: Optional[np.ndarray] = None,
     max_tx: int = 3,
+    envelope_z_rel: Optional[np.ndarray] = None,
+    envelope_rho_p10: Optional[np.ndarray] = None,
+    envelope_rho_p90: Optional[np.ndarray] = None,
+    envelope_tx_index: Optional[int] = None,
 ) -> Path:
     tx_ids = np.asarray(tx_ids, dtype=int).reshape(-1)
     tx_x = np.asarray(tx_x, dtype=float).reshape(-1)
@@ -707,6 +718,19 @@ def save_1d_rho_vs_depth_figure(
         raise ValueError("No transmitters in 1D results")
     picks = np.unique(np.round(np.linspace(0, tx_ids.size - 1, num=min(max_tx, tx_ids.size))).astype(int))
     fig, ax = _fig_axes(1, 1, (5.8, 4.8))
+    if (
+        envelope_z_rel is not None
+        and envelope_rho_p10 is not None
+        and envelope_rho_p90 is not None
+        and envelope_tx_index is not None
+        and int(envelope_tx_index) in picks
+    ):
+        ei = int(envelope_tx_index)
+        tz = float(tx_z[ei]) if tx_z is not None and ei < np.size(tx_z) else 0.0
+        z_abs = tz + np.asarray(envelope_z_rel, dtype=float)
+        p10 = np.power(10.0, np.asarray(envelope_rho_p10, dtype=float))
+        p90 = np.power(10.0, np.asarray(envelope_rho_p90, dtype=float))
+        ax.fill_betweenx(z_abs, p10, p90, alpha=0.25, color="#2980b9", label="DE 10–90%")
     for i in picks:
         rho = rho_layers[i]
         thk = thickness_layers[i]

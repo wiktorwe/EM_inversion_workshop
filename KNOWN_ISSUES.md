@@ -59,32 +59,47 @@ the missing-model symptom was the reader alone.
 
 ---
 
-## 2. BlockInv converges to a local minimum far from the global one
+## 2. BlockInv from a random start still lands in a local minimum
 
-**Status: measured, and it is not a budget problem.**
+**Status: measured on FDTD data; hybrid DE-start path is the Step 05 default
+(`de_blockinv_hybrid`: one DE population per Tx → 10–90% envelope, DE best →
+BlockInv polish). Random-start BlockInv remains available only in experiment
+scripts.**
 
-BlockInv now fits any subset of the 2x2 tensor (that limitation is fixed), but
-on this problem it lands roughly **35x worse than Differential Evolution**:
+On production FDTD data, random-start BlockInv lands roughly **35x worse than
+Differential Evolution** (reproduce with
+`scripts/experiments/blockinv_tensor_test.py`):
 
 | optimizer | components | chi2 scored on all four |
 |---|---|---|
-| BlockInv | Cxx+Cxz | 32.79 |
-| BlockInv | all four | 27.05 |
+| BlockInv (random start) | Cxx+Cxz | 32.79 |
+| BlockInv (random start) | all four | 27.05 |
 | Differential Evolution | all four | **0.76** |
 
 Raising `block_max_iter` does nothing: 15, 40 and 100 give **bit-identical**
 results, because the run stops on `min_dphi_percent`, not on the iteration cap.
-It is a local Gauss-Newton method started from a random draw, and it is
-converging - to the wrong minimum.
 
-Reproduce with `scripts/experiments/blockinv_tensor_test.py`.
+**Hybrid implemented:** `scripts/modules/inversion_blockinv.py` exposes
+`invert_de_then_blockinv` (cheap DE, BlockInv polish, Jacobian uncertainties).
+If polish raises chi-squared above the DE start, the DE model is kept and
+uncertainties are linearised at that point. On the fast inverse-crime synthetic
+in `scripts/experiments/de_blockinv_hybrid.py` (4 layers, 3 freqs, 4 receivers,
+`n_nodes=40`, wall time **14.6 s**):
 
-**What it is still good for:** deterministic, linearised parameter
-uncertainties (`uncertainty_from_result`), which DE does not give you. Use DE
-for the model and BlockInv for error bars on a model you already trust.
+| arm | chi2 (median / single) |
+|---|---|
+| BlockInv random start | **70.14** |
+| DE only (`10x8`) | **2.08** |
+| DE + BlockInv hybrid (`8x6`, 3 seeds) | **2.67** (best seed **1.28**) |
 
-**Fix:** start BlockInv from the DE solution rather than a random draw, or
-multi-start it. Neither is done.
+So the hybrid removes the random-start failure mode and adds uncertainties
+without re-running a large DE budget. Multi-seed spread on the fast synthetic is
+still high (~55 % at `8x6`); the production FDTD head-to-head is not re-run
+here. Use `--slow` on that script for the exhaustive budget sweep (minutes).
+
+**What BlockInv is for:** deterministic linearised uncertainties
+(`uncertainty_from_result`), which DE does not give. The intended workflow is
+cheap DE for the basin, BlockInv for polish and error bars.
 
 ---
 

@@ -626,8 +626,11 @@ previous one; every arrow is a place a change can break something.
 
 ### Step 05 - 1D layered inversion
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
-  `headless`, `inversion_1d`, `inversion_tuning`, `run_report`, `segy`,
-  `setup_defaults`
+  `headless`, `inversion_1d`, `inversion_hybrid`, `inversion_tuning`, `run_report`,
+  `segy`, `setup_defaults`
+- **optimizer** is fixed to `de_blockinv_hybrid` (no dropdown): one DE run per Tx
+  yields a 10–90% population envelope; the DE best is polished with BlockInv for
+  the point model and local Jacobian σ. `n_jobs` parallelises across Tx only.
 - **reads** every dataset of the matrix, grouped by source: each per-frequency
   dataset contributes the ONE tone it was designed for, and
   `inversion_1d.load_tensor_features` stacks them in frequency order. A
@@ -644,7 +647,8 @@ previous one; every arrow is a place a change can break something.
   proportion to how far it stands above the field's own error - which for the
   shipped colinear survey is almost not at all.
 - **writes** `workspace/1D/inversion/Run{N}/`: `REPORT.md`,
-  `analytic_1d_inversion_summary.json`, `run_metadata.json`
+  `analytic_1d_inversion_summary.json`, `run_metadata.json`, NPZ with
+  `envelope_rho_p10/p50/p90_tx{k}` grids and `section_rho_p10/p90` when built
 - **key chain facts**
   - the forward is `analytic_1d_forward.forward_1d_gains(source_field=...)`;
     it MUST match the source that produced the data.
@@ -756,8 +760,9 @@ Two more contracts sit alongside it:
 rockem-suite's `python/` on `sys.path`, so nothing that needs `rockem.*` may be
 imported before it.
 
-`analytic_1d_forward` <- `inversion_1d` <- {`inversion_tuning`, notebook 05,
-`scripts/experiments/{multiscale_1d,tensor_1d_test,blockinv_tensor_test}.py`}
+`analytic_1d_forward` <- `inversion_1d` <- `inversion_hybrid` <- `inversion_blockinv` <- {notebook 05,
+`inversion_tuning`, `scripts/experiments/{multiscale_1d,tensor_1d_test,
+blockinv_tensor_test,de_blockinv_hybrid}.py`}
 `empymod_line_source` <- `analytic_1d_forward` (contrasted-interface fallback
 only; it takes `source_field` and MUST be given it)
 `fd` + `segy` + `source` + `survey` <- `headless` <- {notebook 01, notebook 02,

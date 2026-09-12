@@ -83,7 +83,7 @@ pip install voila ipywidgets plotly numpy ipykernel matplotlib scipy segyio jobl
 | matplotlib  | Plotting (used by workshop modules) |
 | scipy       | Scientific computing (used by workshop modules) |
 | segyio      | Read/write SEG-Y files (required by 01_fw_setup) |
-| joblib      | Parallelizes the 1D inversion's Tx x seed ensemble across CPU cores (05) |
+| joblib      | Parallelizes the 1D hybrid inversion across transmitters (05) |
 
 **Conda users:** After installing, register the kernel so Voila can find it:
 

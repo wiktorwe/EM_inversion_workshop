@@ -77,8 +77,10 @@ This folder is the module-oriented script codebase used by the GUI notebooks
   `magnetic_line_source_fields_layered` - used by `05_1d_inversion`'s
   inversion and by FDTD–analytic calibration. Replaces `empymod_1d_forward.py`
   (below).
+- `inversion_hybrid.py`: Step 05 default path — DE population envelope + BlockInv
+  polish (`invert_tx_hybrid_population`).
 - `inversion_tuning.py`: single-Tx DE budget and Tikhonov λ L-curve helpers
-  used by Step 05 (parallel over seeds / λ values on the QC transmitter). Its
+  used by Step 05 (parallel over Tx; DE budget / λ tuners on the QC transmitter). Its
   model parameterisation, bounds and per-Tx forward now come from
   `inversion_1d` rather than being a third verbatim copy - that copy had gone
   stale (it still forced every receiver to the first receiver's depth after the
@@ -221,6 +223,9 @@ confirms or falsifies it; none of them are imported by the notebooks.
   packs its data and Jacobian into flat real vectors. Also the regression gate
   for that packing: on the Kx pair it must reproduce the pre-generalisation
   result exactly.
+- `de_blockinv_hybrid.py`: DE-start BlockInv on a known 1D synthetic (4
+  components x 3 frequencies). Default finishes in **~15 s**; `--slow` runs the
+  full budget sweep (minutes).
 - `empymod_sign_check.py`: the empymod/native complex ratio for BOTH sources,
   which is what justifies `_EMPY_LINE_SIGN = -1` and the `ab` codes. It runs a
   CONTROL with a deliberately wrong `ab` and FAILS if that also passes - every
