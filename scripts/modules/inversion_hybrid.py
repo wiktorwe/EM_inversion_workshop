@@ -19,6 +19,28 @@ HYBRID_OPTIMIZER_ID = "de_blockinv_hybrid"
 DEFAULT_ENVELOPE_PERCENTILES = (10, 50, 90)
 DEFAULT_ENVELOPE_NZ = 300
 
+# Fixed defaults matching ``scripts/experiments/fast_ambiguity.py`` (~5–8 s/Tx).
+HYBRID_DEFAULTS: Dict[str, Any] = {
+    "optimizer": HYBRID_OPTIMIZER_ID,
+    "popsize": 12,
+    "maxiter": 8,
+    "reg_lambda": 500.0,
+    "block_max_iter": 8,
+    "seed": 42,
+    "n_jobs": -1,
+    "n_runs": 1,
+}
+HYBRID_COMPONENT_WEIGHTS = {f"w_{c}": 1.0 for c in ("Cxx", "Cxz", "Czx", "Czz")}
+
+
+def apply_hybrid_defaults(cfg: Mapping[str, Any]) -> Dict[str, Any]:
+    """Attach fixed hybrid solver settings; user cfg supplies model/bounds only."""
+    out = dict(cfg)
+    out.update(HYBRID_DEFAULTS)
+    out.update(HYBRID_COMPONENT_WEIGHTS)
+    out["optimizer"] = HYBRID_OPTIMIZER_ID
+    return out
+
 
 def score_chi2_data(
     params,
@@ -187,6 +209,9 @@ def invert_tx_hybrid_population(
 
 __all__ = [
     "HYBRID_OPTIMIZER_ID",
+    "HYBRID_DEFAULTS",
+    "HYBRID_COMPONENT_WEIGHTS",
+    "apply_hybrid_defaults",
     "DEFAULT_ENVELOPE_PERCENTILES",
     "score_chi2_data",
     "log10_rho_on_grid",

@@ -358,17 +358,11 @@ An independent 1D layered inversion, run separately for each transmitter, agains
 
   \item \textbf{n\_layers, z\_start, z\_end, rho\_bg, rho\_min, rho\_max, thk\_min, thk\_max} — 1D model parameterization and search bounds. \texttt{rho\_bg}/\texttt{rho\_min}/\texttt{rho\_max} are seeded from Step 01's \texttt{rho\_min\_ohm\_m}/\texttt{rho\_max\_ohm\_m} when present.
 
-  \item \textbf{Hybrid method} — Fixed pipeline: one Differential Evolution run per Tx (final population $\rightarrow$ 10--90\% depth envelope), then BlockInv polish on the DE best for the point model and local Jacobian $\sigma$.
-
-  \item \textbf{maxiter, popsize, seed, n\_jobs, blk\_iter} — DE budget, BlockInv polish cap, and parallel Tx count.
-
-  \item \textbf{w\_hxh, w\_hxhz, Tikhonov lambda} — Misfit weights and smoothness penalty.
-
-  \item \textbf{Single-Tx tuners (QC Tx)} — Parallel helpers that operate on the transmitter selected in \textbf{QC Tx} (not the full survey). \textbf{Tune DE budget} raises \texttt{(popsize, maxiter)} through a fixed ladder until several random seeds agree on the total objective (relative spread $\le 5\%$); \textbf{Apply DE recommendation} writes the cheapest stable pair into the widgets. \textbf{Tune lambda L-curve} sweeps Tikhonov $\lambda$ at the current DE settings, plots $\log_{10}(\mathrm{data\ misfit})$ vs $\log_{10}(\mathrm{reg\ norm})$, and picks the corner; \textbf{Apply lambda recommendation} sets the widget. Prefer DE tune before $\lambda$ if the default $10/30$ budget is seed-unstable. Uses \texttt{n\_jobs} and \textbf{tune seeds}.
+  \item \textbf{Hybrid method} — Fixed pipeline: one Differential Evolution run per Tx (final population $\rightarrow$ 10--90\% depth envelope), then BlockInv polish on the DE best for the most-likely model. DE budget, Tikhonov $\lambda$, component weights, seed, and parallel Tx count are fixed in the workshop configuration (\texttt{inversion\_hybrid.HYBRID\_DEFAULTS}); they are not exposed in the GUI.
 
   \item \textbf{dx\_out, dz\_out, zmax (0=auto)} — Pseudo-2D output grid.
 
-  \item \textbf{Buttons} — \textbf{Reload features}, \textbf{Check kx convergence}, \textbf{Run all Tx inversions}, \textbf{Build pseudo-2D section}, \textbf{Export results} (NPZ/JSON/\texttt{REPORT.md} under current \texttt{RunN}), \textbf{Refresh QC plots}, \textbf{Tune DE budget (QC Tx)}, \textbf{Tune lambda L-curve (QC Tx)}, \textbf{Apply DE/lambda recommendation}, \textbf{Quit GUI server}.
+  \item \textbf{Buttons} — \textbf{Reload features}, \textbf{Run all Tx inversions}, \textbf{Build pseudo-2D section}, \textbf{Export results} (NPZ/JSON/\texttt{REPORT.md} under current \texttt{RunN}), \textbf{Refresh QC plots}, \textbf{Quit GUI server}.
 
   \item \textbf{Per-run report} — Every successful inversion writes under \texttt{workspace/1D/inversion/OneDRunN/}: \texttt{REPORT.md} (human-readable), \texttt{analytic\_1d\_inversion\_summary.json} (full parameters: frequencies, \texttt{n\_periods}, optimizer, weights, bounds, calibration, misfit/$\chi^2$), and \texttt{run\_metadata.json}. You should not need to remember what was run.
 

@@ -626,11 +626,13 @@ previous one; every arrow is a place a change can break something.
 
 ### Step 05 - 1D layered inversion
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
-  `headless`, `inversion_1d`, `inversion_hybrid`, `inversion_tuning`, `run_report`,
-  `segy`, `setup_defaults`
+  `headless`, `inversion_1d`, `inversion_hybrid`, `run_report`, `segy`, `setup_defaults`
 - **optimizer** is fixed to `de_blockinv_hybrid` (no dropdown): one DE run per Tx
   yields a 10–90% population envelope; the DE best is polished with BlockInv for
-  the point model and local Jacobian σ. `n_jobs` parallelises across Tx only.
+  the point model. Solver budget (popsize, maxiter, λ, BlockInv polish, seed,
+  component weights, `n_jobs`) comes from `inversion_hybrid.HYBRID_DEFAULTS` via
+  `apply_hybrid_defaults()` — the GUI exposes **model parameterisation only**
+  (layers, depth range, ρ/thk bounds, background ρ, section grid).
 - **reads** every dataset of the matrix, grouped by source: each per-frequency
   dataset contributes the ONE tone it was designed for, and
   `inversion_1d.load_tensor_features` stacks them in frequency order. A
@@ -653,7 +655,8 @@ previous one; every arrow is a place a change can break something.
   - the forward is `analytic_1d_forward.forward_1d_gains(source_field=...)`;
     it MUST match the source that produced the data.
   - `inversion_1d` holds the one true parameterisation and misfit. Notebook 05
-    and `inversion_tuning` both import it - do not re-add a local copy.
+    imports it - do not re-add a local copy. Do not re-expose DE/lambda tuners
+    or solver knobs in the GUI.
 
 ### Step 06 - 1D results
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
