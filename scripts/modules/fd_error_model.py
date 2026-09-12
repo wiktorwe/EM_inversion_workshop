@@ -75,6 +75,14 @@ QUADRATURE_REL_ERROR = 0.0022
 # failure mode of scaling sigma by |obs|.
 MIN_REL_ERROR = 1e-3
 
+# The layered Greens solver's layer matrix carries exp(±γ·thickness) with
+# γ ~ LAM_MAX_MULTIPLIER * 40 / δ_min. float64 overflows near exp(709), so a
+# finite layer thicker than ~8.9 skin depths at the shipped multiplier of 2
+# is unevaluable. Cap below that. The 2/25/100 Ω·m, 40+35 m reference is 4.4
+# skin depths at 6 kHz (no scale) and 17 skin depths at 96 kHz (must scale).
+MAX_LAYER_SKIN_DEPTHS = 8.0
+_MU0 = 4.0 * np.pi * 1e-7
+
 
 def _stencil_coeffs(order: int) -> Sequence[float]:
     """The staggered first-derivative coefficient row for `order`.
@@ -149,6 +157,39 @@ def geometric_rel_error(offsets_m, dx_m: float) -> np.ndarray:
     return (float(dx_m) / np.maximum(r, float(dx_m))) ** 2
 
 
+def _skin_depth_m(resistivity_ohm_m: float, freq_hz: float) -> float:
+    omega = 2.0 * np.pi * float(freq_hz)
+    return float(np.sqrt(2.0 * float(resistivity_ohm_m) / (omega * _MU0)))
+
+
+def _max_layer_skin_depths(rho, thickness, freq_hz: float) -> float:
+    """Worst finite-layer thickness in skin depths of that layer."""
+    rho = np.asarray(rho, dtype=float).reshape(-1)
+    thk = np.asarray(thickness, dtype=float).reshape(-1)
+    if thk.size == 0:
+        return 0.0
+    worst = 0.0
+    for i, h in enumerate(thk):
+        delta = _skin_depth_m(float(rho[i]), float(freq_hz))
+        worst = max(worst, float(h) / max(delta, 1e-30))
+    return float(worst)
+
+
+def _electrically_safe_thickness(rho, thickness, freq_hz: float,
+                                 max_skins: float = MAX_LAYER_SKIN_DEPTHS):
+    """Uniformly scale thicknesses so no finite layer exceeds `max_skins`.
+
+    Uniform so the tx-to-interface geometry (asymmetric 40/35 split that keeps
+    the source off the 2/25 Ω·m contact) is preserved. Resistivities are
+    untouched: this is still a fixed reference Earth, not the candidate.
+    """
+    thk = np.asarray(thickness, dtype=float)
+    worst = _max_layer_skin_depths(rho, thk, freq_hz)
+    if worst <= float(max_skins):
+        return thk
+    return thk * (float(max_skins) / worst)
+
+
 def interface_quantisation_rel(
     freqs_hz,
     offsets_m,
@@ -176,25 +217,56 @@ def interface_quantisation_rel(
     transmitter inside the middle layer as in the real survey. It is deliberately
     a FIXED reference model, not the candidate being fitted: a sigma that moved
     with the model would make the objective ill-posed.
+
+    Thicknesses are an electrical property of the frequency. The 40+35 m
+    numbers are the 2-6 kHz reference; at a higher tone the same metres are
+    many skin depths and the layered Greens solver overflows. Finite layers
+    are scaled uniformly so none exceeds `MAX_LAYER_SKIN_DEPTHS`. A frequency
+    the solver still cannot evaluate contributes 0 (the rest of `sigma_budget`
+    still applies) rather than aborting calibration.
     """
-    from scripts.modules.analytic_1d_forward import forward_1d_gains
+    from scripts.modules.analytic_1d_forward import ForwardRejected, forward_1d_gains
 
     freqs = np.asarray(freqs_hz, dtype=float).reshape(-1)
     off = np.asarray(offsets_m, dtype=float).reshape(-1)
     rx_z = float(tx_depth_m) if rx_depth_m is None else rx_depth_m
+    rho = np.asarray(rho, dtype=float)
     thk = np.asarray(thickness, dtype=float)
-
-    ref_hx, ref_hz = forward_1d_gains(np.asarray(rho, dtype=float), thk, freqs,
-                                      off, float(tx_depth_m), rx_z, eps_r)
-    moved = thk.copy()
-    moved[0] += 0.5 * float(dx_m)
-    hx, hz = forward_1d_gains(np.asarray(rho, dtype=float), moved, freqs,
-                              off, float(tx_depth_m), rx_z, eps_r)
+    eps_arr = np.asarray(eps_r, dtype=float).reshape(-1)
+    if eps_arr.size == 1:
+        eps_arr = np.full(freqs.shape, float(eps_arr[0]))
+    if eps_arr.shape != freqs.shape:
+        raise ValueError(
+            f"eps_r size {eps_arr.size} matches neither 1 nor the frequency "
+            f"count {freqs.size}"
+        )
+    half = 0.5 * float(dx_m)
 
     def _rel(a, b):
         return np.max(np.abs(np.abs(a) / np.maximum(np.abs(b), 1e-300) - 1.0), axis=1)
 
-    return {"HX": _rel(hx, ref_hx), "HZ": _rel(hz, ref_hz)}
+    def _pair(thk_use, freq, eps_use):
+        ref_hx, ref_hz = forward_1d_gains(
+            rho, thk_use, np.asarray([freq]), off, float(tx_depth_m), rx_z, eps_use)
+        moved = np.asarray(thk_use, dtype=float).copy()
+        moved[0] += half
+        hx, hz = forward_1d_gains(
+            rho, moved, np.asarray([freq]), off, float(tx_depth_m), rx_z, eps_use)
+        return float(_rel(hx, ref_hx)[0]), float(_rel(hz, ref_hz)[0])
+
+    hx_out = np.empty(freqs.size, dtype=float)
+    hz_out = np.empty(freqs.size, dtype=float)
+    for i, f in enumerate(freqs):
+        thk_use = _electrically_safe_thickness(rho, thk, float(f))
+        try:
+            hx_out[i], hz_out[i] = _pair(thk_use, float(f), float(eps_arr[i]))
+        except ForwardRejected:
+            try:
+                hx_out[i], hz_out[i] = _pair(0.5 * thk_use, float(f), float(eps_arr[i]))
+            except ForwardRejected:
+                hx_out[i] = 0.0
+                hz_out[i] = 0.0
+    return {"HX": hx_out, "HZ": hz_out}
 
 
 def sigma_budget(
@@ -271,11 +343,13 @@ def sigma_budget(
 
 
 __all__ = [
+    "MAX_LAYER_SKIN_DEPTHS",
     "MIN_REL_ERROR",
     "QUADRATURE_REL_ERROR",
     "analytic_C",
     "derivative_symbol_error",
     "geometric_rel_error",
+    "interface_quantisation_rel",
     "sigma_budget",
     "stencil_consistency",
 ]

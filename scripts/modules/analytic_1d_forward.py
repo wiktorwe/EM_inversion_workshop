@@ -93,8 +93,23 @@ _CONTRASTED_INTERFACE_MSG = "contrasted layer interface"
 # multiplier 1 (measured 0.000 % change at every frequency), so this does not
 # move the fitted C(f) - it only helps the inversion's thin, high-contrast
 # candidate models.
+#
+# A SECOND cap is required: `_default_lam_max` is keyed on the most conductive
+# layer, but the layer matrix carries exp(±γ·h) for EVERY finite thickness, with
+# γ ~ lam_max. float64 overflows near exp(709) and the solve goes singular
+# sooner. On this survey's true stack the 50 m interior layer is only 3 skin
+# depths at 96 kHz, yet δ_min of the 2 Ω·m layer sets lam_max x2 ≈ 35 and
+# exp(35·50) is unevaluable (measured: lam_max 20 fails, 10 agrees with 5/2/1).
+# Cap at EXP_OVERFLOW_ARG / max finite thickness. At 2-6 kHz the policy value
+# is already smaller (5-9 vs 10), so the 0.22 % x2 figure is unchanged.
 LAM_MAX_MULTIPLIER = 2.0
+EXP_OVERFLOW_ARG = 500.0
 _ANNOUNCED = False
+
+
+def _max_finite_thickness_m(layers: List[Layer1D]) -> float:
+    thks = [float(l.thickness_m) for l in layers if l.thickness_m is not None]
+    return max(thks) if thks else 0.0
 
 
 def announce_quadrature_policy(force: bool = False) -> str:
@@ -106,7 +121,8 @@ def announce_quadrature_policy(force: bool = False) -> str:
     """
     global _ANNOUNCED
     msg = (f"[analytic_1d_forward] kx quadrature: lam_max = {LAM_MAX_MULTIPLIER:g} x "
-           f"_default_lam_max, n_nodes scaled by the same factor "
+           f"_default_lam_max, capped at {EXP_OVERFLOW_ARG:g}/h_max so the layer "
+           f"matrix stays finite; n_nodes scaled by the same factor "
            f"(node density unchanged)")
     if force or not _ANNOUNCED:
         print(msg)
@@ -125,7 +141,11 @@ def resolve_quadrature(layers: List[Layer1D], freq_hz: float, n_nodes: int,
         return int(n_nodes), float(lam_max)
     from rockem.greens.greens_layered_2d import _default_lam_max
     mult = float(LAM_MAX_MULTIPLIER)
-    return int(round(n_nodes * mult)), mult * _default_lam_max(layers, float(freq_hz))
+    lam = mult * _default_lam_max(layers, float(freq_hz))
+    hmax = _max_finite_thickness_m(layers)
+    if hmax > 0.0:
+        lam = min(lam, float(EXP_OVERFLOW_ARG) / hmax)
+    return int(round(n_nodes * mult)), lam
 
 
 class ForwardRejected(Exception):
@@ -650,6 +670,7 @@ def check_kx_convergence(
 
 
 __all__ = [
+    "EXP_OVERFLOW_ARG",
     "LAM_MAX_MULTIPLIER",
     "snap_interfaces_to_grid",
     "ForwardRejected",

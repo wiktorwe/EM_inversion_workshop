@@ -380,10 +380,12 @@ implementation imported everywhere:
 - `scripts/modules/inversion_1d.py` - 1D parameterisation, misfit, tensor
   forward, `tensor_objective_parts` (THE decomposed misfit - `tensor_objective`
   and `inversion_tuning.split_objective` are both thin wrappers over it),
-  `resolve_tensor_calibration` and `component_weights`. The last two used to
-  live in notebook 05 where `inversion_tuning` could not reach them, which is
-  exactly why the tuners kept a Kx-only copy and tuned a different objective
-  from the one being minimised.
+  `resolve_tensor_calibration` and `component_weights`, and the shared
+  layered-model plot helpers (`depth_window_for_tx`, `layer_stairstep_rho_depths`,
+  `layer_center_depths`, `padded_rho_axis`). `resolve_tensor_calibration` and
+  `component_weights` used to live in notebook 05 where `inversion_tuning`
+  could not reach them, which is exactly why the tuners kept a Kx-only copy and
+  tuned a different objective from the one being minimised.
 - `scripts/modules/headless.py` - the Step 01/02 pipeline as plain functions;
   notebooks call it rather than reimplementing it, and it is verified to
   reproduce notebook 01's outputs byte-for-byte. `iter_datasets` is the one
@@ -397,11 +399,28 @@ implementation imported everywhere:
 `KNOWN_ISSUES.md` and this skill are consumers like any other. **Any change that
 alters behaviour either of them describes must update both in the same edit.**
 
-- Fixed an entry in `KNOWN_ISSUES.md`? Delete it in that change. Do not leave it
-  "for later" - the next person will re-investigate a problem that no longer
-  exists.
+### `KNOWN_ISSUES.md` IS A TODO LIST, NOT A CHANGELOG
+
+**It tracks bugs and limitations that still exist.** Each entry is something
+that needs to be fixed, or that currently cannot be fixed. It is a working
+list, not a history of the repo.
+
+It is **not** a changelog. Do not put any of these in it:
+
+- a fix that has already shipped
+- a workaround that is now the production path ("hybrid implemented",
+  "we then auto-tune…")
+- how an entry used to fail, what was tried, or what an older version did
+- "two things were wrong and are now not"
+
+If you fixed the problem, **delete the entry in the same change.** If a
+workaround removed the problem from the user's path, delete the entry — or
+rewrite it down to the limitation that *remains*. Do not append a paragraph
+that celebrates the fix. Git and RULE 4's breakage table already record what
+changed.
+
 - Found a new limitation while fixing something else? Add it in that same
-  change, with what you measured. Most entries in that file were found this way.
+  change, as a present-tense problem, with what you measured.
 - Changed a default, a file name, a metadata key, a function signature or the
   step order? Grep this skill for it and fix the text. The chain map below and
   the `setup_metadata.json` key list are the parts that rot fastest.
@@ -434,7 +453,7 @@ Where each of those goes instead:
 
 | Content | Home |
 |---|---|
-| limitations, current state, "this is broken/partial" | `KNOWN_ISSUES.md` |
+| open bugs and limitations that still exist (todo) | `KNOWN_ISSUES.md` |
 | parameter meaning and impact, longer descriptions | `doc/gui_manual.tex` |
 | workflow, install, layout | `README.md` |
 | measured numbers and how they were obtained | `doc/numerics_findings.md` |
@@ -626,13 +645,18 @@ previous one; every arrow is a place a change can break something.
 
 ### Step 05 - 1D layered inversion
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
-  `headless`, `inversion_1d`, `inversion_hybrid`, `run_report`, `segy`, `setup_defaults`
+  `headless`, `inversion_1d`, `inversion_autotune`, `inversion_hybrid`, `run_report`,
+  `segy`, `setup_defaults`
 - **optimizer** is fixed to `de_blockinv_hybrid` (no dropdown): one DE run per Tx
   yields a 10–90% population envelope; the DE best is polished with BlockInv for
-  the point model. Solver budget (popsize, maxiter, λ, BlockInv polish, seed,
-  component weights, `n_jobs`) comes from `inversion_hybrid.HYBRID_DEFAULTS` via
-  `apply_hybrid_defaults()` — the GUI exposes **model parameterisation only**
-  (layers, depth range, ρ/thk bounds, background ρ, section grid).
+  the point model. DE budget, seed, component weights and `n_jobs` come from
+  `inversion_hybrid.HYBRID_DEFAULTS` via `apply_hybrid_defaults()`. `reg_lambda`
+  and `blockinv_lam` are chosen by `inversion_autotune.run_hybrid_line_with_autotune`
+  from a full-budget hybrid grid on a few independent pilot Tx — the grid
+  always includes `(0, 0)`. Each Tx inversion is independent: no lateral
+  regularisation and no neighbour warm-start. The GUI exposes **model
+  parameterisation only** (layers, depth range, ρ/thk bounds, background ρ,
+  section grid).
 - **reads** every dataset of the matrix, grouped by source: each per-frequency
   dataset contributes the ONE tone it was designed for, and
   `inversion_1d.load_tensor_features` stacks them in frequency order. A
@@ -656,11 +680,13 @@ previous one; every arrow is a place a change can break something.
     it MUST match the source that produced the data.
   - `inversion_1d` holds the one true parameterisation and misfit. Notebook 05
     imports it - do not re-add a local copy. Do not re-expose DE/lambda tuners
-    or solver knobs in the GUI.
+    or solver knobs in the GUI. Auto-tune picks λ internally.
 
 ### Step 06 - 1D results
 - **imports** `analytic_1d_forward`, `fd_visualization`, `fdtd_analytic_calibration`,
-  `headless`, `run_report`, `segy`, `setup_defaults`
+  `headless`, `inversion_1d` (Per-Tx depth/stairstep/axis helpers, lateral
+  median, section-column layers), `run_report`,
+  `segy`, `setup_defaults`
 - **layout** mirrors Step 04: global **Run:** selector (auto-loads on change) +
   run-parameters panel; **Models** tab (pseudo-2D section, slices, per-Tx model,
   export) and **Data** tab (view selector, real vs analytic synthetic compare).
@@ -678,6 +704,22 @@ previous one; every arrow is a place a change can break something.
     discarded, so Czx/Czz could not be displayed at all.
   - hybrid runs plot DE envelope width (p90−p10) on the pseudo-2D section when
     `section_rho_p10/p90` are in the NPZ; legacy runs still show std.
+  - Lateral median on the displayed pseudo-2D section is a view control
+    (`n_tx_span` on `rebuild_pseudosection`): it medians neighbouring Tx
+    depth profiles, then paints the section. It does not regularise the
+    inversion and it must not median the FD grid (that mixes background
+    fill into the first Tx). The section interpolant holds each end Tx
+    through half an FD cell (`_interp_profiles_to_section`). Generate
+    synthetics use `tx_layers_from_displayed`: saved layers when the
+    median is off, the filtered profile at that Tx when it is on. Always
+    rebuild the displayed section from saved layers — do not reuse a
+    cached NPZ `section_rho` that was painted with `left=background`.
+    Do not reimplement these in the notebook.
+  - Per-Tx layered model (`update_tx_diag`): hybrid line is a **stairstep**
+    via `layer_stairstep_rho_depths`; depths anchor with
+    `depth_window_for_tx` on the run summary's absolute `z_start`/`z_end`;
+    envelope shading uses `tx_z + envelope_z_tx{k}`; resistivity axis uses
+    `padded_rho_axis`. Do not reimplement these in the notebook.
   - it WARNS when a run's `data_convention` is older than
     `run_report.DATA_CONVENTION`. Bump that constant whenever a change makes
     new channel gains incomparable with old ones, and say why in its comment.
@@ -770,9 +812,9 @@ Two more contracts sit alongside it:
 rockem-suite's `python/` on `sys.path`, so nothing that needs `rockem.*` may be
 imported before it.
 
-`analytic_1d_forward` <- `inversion_1d` <- `inversion_hybrid` <- `inversion_blockinv` <- {notebook 05,
+`analytic_1d_forward` <- `inversion_1d` <- `inversion_hybrid` <- `inversion_blockinv` <- `inversion_autotune` <- {notebook 05,
 `inversion_tuning`, `scripts/experiments/{multiscale_1d,tensor_1d_test,
-blockinv_tensor_test,de_blockinv_hybrid}.py`}
+blockinv_tensor_test,de_blockinv_hybrid,tune_hybrid_line}.py`}
 `empymod_line_source` <- `analytic_1d_forward` (contrasted-interface fallback
 only; it takes `source_field` and MUST be given it)
 `fd` + `segy` + `source` + `survey` <- `headless` <- {notebook 01, notebook 02,
@@ -903,7 +945,7 @@ all of `scripts/experiments/`}
   keyed on `(eps_r, snap_dz, snap_origin_m)`. One grid for a joint fit is right
   for one tone and wrong for the rest. The evidence is the RECOVERED MODEL, not
   the true-model chi-squared, which does not separate the two - see
-  `KNOWN_ISSUES.md` section 3 for both tables. The deepest interior interface is
+  `doc/numerics_findings.md`. The deepest interior interface is
   the pinned depth-window edge and is not fitted, so it is not snapped
   (`pin_last`).
 - **`C(f)` is COMPUTED, not fitted: `C = dx*dz*s(order)`.** The engine injects
@@ -919,6 +961,20 @@ all of `scripts/experiments/`}
   half-cell interface quantisation, 0.22 % analytic quadrature. `eps_r`
   inflation contributes ZERO - it biases both sides equally. It halved the
   recovered model error (0.8417 -> 0.3569 rms log10 rho).
+- **The quantisation reference stack is electrically capped.**
+  `interface_quantisation_rel` uses the 2/25/100 Ω·m, 40+35 m stack at 2–6 kHz.
+  Thicknesses scale uniformly so no finite layer exceeds 8 skin depths: the
+  layered Greens solver's `exp(γh)` overflows near 9 at `LAM_MAX_MULTIPLIER=2`.
+  Hybrid auto-tune strips `snap_dz`, so this forward always runs and must not
+  raise. A tone the solver still cannot evaluate contributes 0 to that term.
+- **`lam_max` is also capped by the thickest finite layer.**
+  `_default_lam_max` follows δ_min (most conductive layer). The layer matrix
+  still has to form exp(±γ·h) for every thickness, so
+  `resolve_quadrature` takes `min(2·40/δ_min, 500/h_max)`. At 96 kHz on the
+  Fault_1 true stack that is 10 vs 35; without the cap the 50 m layer makes
+  the solve singular and Step 05 QC dies. At 2–6 kHz the policy value is
+  already smaller, so the 0.22 % x2 figure is unchanged. An explicit `lam_max`
+  is not capped.
 - **Snapping and the budget's quantisation term are ALTERNATIVES.** Snapping
   removes the error from the residual; charging for it in sigma too is
   double-counting and measured WORSE (0.9357) than snapping alone. Removing
@@ -928,7 +984,7 @@ all of `scripts/experiments/`}
   budget, and larger than |obs| itself), because it was fitted where Hz is a
   near-null. Those components were nominally fitted and effectively were not -
   so any result that quotes an all-four-component improvement needs re-running.
-  See KNOWN_ISSUES 5.
+  See `KNOWN_ISSUES.md` (cross-couplings on their null).
 - **Every per-frequency dataset has its own grid, its own C and its own
   `n_periods_extract`.** Never read a whole band out of one per-frequency
   dataset - it only contains the tone it was designed for, and the others are
